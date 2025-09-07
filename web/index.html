@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Image Creator UI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Material+Symbols+Outlined" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-bar surface">
+    <div class="app-bar__title">
+      <span class="material-symbols-outlined">image</span>
+      <span>Image Creator</span>
+    </div>
+    <nav class="app-bar__nav">
+      <a href="http://localhost:8000/docs" target="_blank" class="text-button">API Docs</a>
+      <a href="http://localhost:8000/health" target="_blank" class="text-button">Health</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <section class="card surface chat-card">
+      <h1 class="headline">Image chat</h1>
+      <div id="chat" class="chat" aria-live="polite" aria-busy="false"></div>
+
+      <div class="composer">
+        <div class="field">
+          <label for="prompt" class="label">Prompt</label>
+          <div class="textarea-wrapper">
+            <textarea id="prompt" rows="3" placeholder="e.g. a cozy cabin in the woods, cinematic lighting"></textarea>
+          </div>
+        </div>
+
+        <div class="composer-row">
+          <label class="checkbox">
+            <input type="checkbox" id="storeLocal" checked />
+            <span>Store image locally</span>
+          </label>
+
+          <div class="actions">
+            <button id="generateBtn" class="filled-button">
+              <span>Generate image</span>
+            </button>
+            <button id="cancelBtn" class="outlined-button" disabled>
+              <span class="material-symbols-outlined">cancel</span>
+              <span>Cancel</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="progress" class="progress hidden" role="progressbar" aria-busy="true">
+          <div class="linear-progress">
+            <div class="bar"></div>
+          </div>
+          <span class="caption">Generating image…</span>
+        </div>
+
+        <div id="error" class="error hidden" role="alert"></div>
+      </div>
+    </section>
+  </main>
+
+  
+
+  <script src="main.js" type="module"></script>
+</body>
+</html>
