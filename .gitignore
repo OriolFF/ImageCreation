@@ -1,0 +1,34 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+imageAPI/
+.venv/
+venv/
+env/
+
+# Models and large assets
+/models
+models/
+
+# Python caches/compiled files
+__pycache__/
+*.py[cod]
+*.so
+
+# Hugging Face and other caches
+**/.cache/
+cache/
+
+# OS / Editor files
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Outputs / logs
+output.png
+outputs/
+logs/

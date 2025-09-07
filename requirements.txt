@@ -1,0 +1,16 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+
+# Core ML stack
+torch>=2.3.0
+accelerate>=0.31.0
+transformers>=4.43.0
+diffusers>=0.29.0
+safetensors>=0.4.2
+pillow>=10.3.0
+python-dotenv>=1.1.1
+
+# Required for transformers tokenizers (google.protobuf)
+protobuf>=4.25.3,<5.0.0
+# Required for T5 and sentencepiece-based tokenizers
+sentencepiece>=0.2.0
