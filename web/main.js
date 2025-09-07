@@ -11,10 +11,14 @@ function setBusy(isBusy) {
     $("#generateBtn").disabled = true;
     $("#cancelBtn").disabled = false;
     $("#error").classList.add("hidden");
+    $("#prompt").disabled = true;
   } else {
     $("#progress").classList.add("hidden");
     $("#generateBtn").disabled = false;
     $("#cancelBtn").disabled = true;
+    $("#prompt").disabled = false;
+    // Return focus to the input for faster next prompt entry
+    $("#prompt").focus();
   }
 }
 
@@ -84,6 +88,9 @@ async function generate() {
 
   // Add user message to chat
   appendMessage({ role: "user", text: prompt });
+
+  // Clear input immediately so it doesn't appear duplicated while generating
+  $("#prompt").value = "";
 
   ctrl = new AbortController();
   setBusy(true);
