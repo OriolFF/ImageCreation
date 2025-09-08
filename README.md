@@ -188,6 +188,148 @@ await fs.writeFile('output.png', Buffer.from(b64, 'base64'));
 console.log('Saved output.png');
 ```
 
+### Kotlin (JVM, OkHttp)
+
+Add the dependency (Gradle Kotlin DSL shown):
+
+```kotlin
+dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+}
+```
+
+Example usage:
+
+```kotlin
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.Base64
+import java.nio.file.Files
+import java.nio.file.Paths
+
+fun main() {
+    val client = OkHttpClient()
+
+    val json = """
+        {"prompt": "a serene lake at dusk, watercolor", "store_local": true}
+    """.trimIndent()
+
+    val request = Request.Builder()
+        .url("http://localhost:8000/v1/images/generations")
+        .post(json.toRequestBody("application/json".toMediaType()))
+        .build()
+
+    client.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) error("HTTP ${'$'}{response.code}")
+        val body = response.body?.string() ?: error("Empty response body")
+
+        // Very small JSON extraction; for production use a JSON library like kotlinx.serialization or Jackson
+        val regex = Regex("\"b64_json\"\s*:\s*\"([^\"]+)\"")
+        val match = regex.find(body) ?: error("b64_json not found in response")
+        val b64 = match.groupValues[1]
+
+        val bytes = Base64.getDecoder().decode(b64)
+        val out = Paths.get("output.png")
+        Files.write(out, bytes)
+        println("Saved ${'$'}out")
+    }
+}
+```
+
+## Model management
+
+The server exposes endpoints to list and switch models at runtime. A small registry is built-in and you can also select a specific Hugging Face repo directly.
+
+- Built-in registry (`AVAILABLE_MODELS`):
+  - `schnell` → `black-forest-labs/FLUX.1-schnell`
+  - `dev` → `black-forest-labs/FLUX.1-dev`
+
+Endpoints:
+
+- List models
+```bash
+curl http://localhost:8000/v1/models | jq
+```
+
+- Select model by key or by repo id
+```bash
+# by key
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"model":"dev"}' \
+  http://localhost:8000/v1/models/select
+
+# by explicit repo id
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"model":"black-forest-labs/FLUX.1-schnell"}' \
+  http://localhost:8000/v1/models/select
+```
+
+Startup configuration (environment variables):
+
+```bash
+# choose a registry key (default: schnell)
+export FLUX_MODEL_KEY=schnell   # or dev
+
+# or force a specific model repo (overrides key and marks as custom)
+export FLUX_MODEL_ID=black-forest-labs/FLUX.1-dev
+
+# optional: enable CPU offload if memory-constrained
+export FLUX_ENABLE_CPU_OFFLOAD=1
+```
+
+### Web UI model selector
+
+The web client includes a model selector in the header. It fetches available models from `GET /v1/models` and switches with `POST /v1/models/select`.
+
+Steps:
+- Start the server: `python3 ImageServer.py`
+- Serve the web client: `python3 -m http.server 5500 -d web`
+- Open `http://localhost:5500` and use the “Model” dropdown to switch between `schnell` and `dev` (or a custom active model).
+
+## Performance tuning and caching
+
+### Environment variables
+
+These env vars control performance/memory trade-offs and caching behavior:
+
+```bash
+# Prefer a stable cache location
+export HF_CACHE_DIR="$HOME/.cache/huggingface"
+
+# Pin a model snapshot (commit/tag) to avoid fetching newer snapshots unexpectedly
+export FLUX_REVISION=main   # or a specific commit hash/tag
+
+# Optional model variant (e.g., fp16) if provided by the repo
+export FLUX_VARIANT=fp16
+
+# Optional: offline-only mode (requires that the model is already in the cache)
+export HF_HUB_OFFLINE=1
+
+# Performance knobs (defaults shown)
+export FLUX_DISABLE_SLICING=0        # set to 1 to disable attention slicing
+export FLUX_DISABLE_VAE_TILING=0     # set to 1 to disable VAE tiling
+export FLUX_ENABLE_CPU_OFFLOAD=0     # set to 1 to offload parts to CPU (more stable, lower GPU util)
+
+# Optional: preload all AVAILABLE_MODELS at startup to avoid first-request latency
+export FLUX_PRELOAD_MODELS=0         # set to 1 to preload
+```
+
+Notes:
+- Disabling slicing/tiling may increase peak memory but improve throughput/GPU utilization.
+- CPU offload reduces GPU memory usage but can lower GPU utilization and add CPU overhead.
+- Preloading eliminates the “first generation after switching is slow” effect.
+
+### UI presets and fallback notices
+
+The web client includes a Preset selector:
+- Low: 512×512, 4 steps, guidance=3.0 (fastest)
+- Medium: 512×512, 12 steps, guidance=3.0 (balanced)
+- High: 640×640, 16 steps, guidance=3.5 (quality; may OOM on dev)
+
+If the server applies a memory fallback (e.g., on MPS OOM), the UI shows a notice detailing how the requested parameters were reduced. The API response includes `params.fallback_applied` and `params.original_params` for introspection.
+
 ## Troubleshooting
 
 - Model download/auth errors (401/403): ensure `HUGGINGFACE_HUB_TOKEN` or `HF_ACCESS_TOKEN` is set and valid.
@@ -195,6 +337,10 @@ console.log('Saved output.png');
 - Out-of-memory: generation uses substantial RAM/VRAM; server is configured with `enable_model_cpu_offload()` to reduce GPU memory use.
 - Port already in use: change ports, e.g. `python3 ImageServer.py` still uses 8000; for the web client use `python3 -m http.server 5501 -d web`.
 - CORS: development CORS is permissive (`*`). For production, restrict `allow_origins` appropriately in `ImageServer.py`.
+
+## External references
+
+https://github.com/Xza85hrf/flux_pipeline
 
 ## License
 
