@@ -49,6 +49,49 @@ function setModelBusy(isBusy) {
   }
 }
 
+// --- Presets and model-aware configuration ---
+const DEFAULT_PRESETS = {
+  low:    { height: 512, width: 512, steps: 4,  guidance: 3.0 },
+  medium: { height: 512, width: 512, steps: 12, guidance: 3.0 },
+  high:   { height: 640, width: 640, steps: 16, guidance: 3.5 },
+};
+
+// For FLUX.1-dev: higher resolutions and >= 24 steps
+const DEV_PRESETS = {
+  low:    { height: 640, width: 640, steps: 24, guidance: 3.0 },
+  medium: { height: 704, width: 704, steps: 28, guidance: 3.0 },
+  high:   { height: 768, width: 768, steps: 32, guidance: 3.0 },
+};
+
+let currentPresetMap = { ...DEFAULT_PRESETS };
+
+function updatePresetsForModel(modelKey) {
+  const presetSelect = document.querySelector('#presetSelect');
+  if (!presetSelect) return;
+  const isDev = modelKey === 'dev';
+  currentPresetMap = isDev ? { ...DEV_PRESETS } : { ...DEFAULT_PRESETS };
+
+  // Update option labels to reflect current preset values
+  const labelFor = (p) => `${p.height}×${p.width}, ${p.steps} steps`;
+  const options = Array.from(presetSelect.options);
+  const keys = ['low', 'medium', 'high']; // keep 'custom' untouched
+  keys.forEach((k) => {
+    const opt = options.find(o => o.value === k);
+    if (opt) opt.textContent = `${k[0].toUpperCase()}${k.slice(1)} (${labelFor(currentPresetMap[k])})`;
+  });
+
+  // When switching to 'dev', default to a sensible preset automatically (unless user chose custom)
+  if (isDev && presetSelect.value !== 'custom') {
+    presetSelect.value = 'medium'; // 704×704, 28 steps for dev
+    presetSelect.dispatchEvent(new Event('change'));
+  }
+}
+
+function roundTo64(n) {
+  const x = Math.max(256, parseInt(n || 0, 10));
+  return Math.round(x / 64) * 64;
+}
+
 async function loadModels() {
   try {
     console.log("[UI] loadModels: fetching", MODELS_URL);
