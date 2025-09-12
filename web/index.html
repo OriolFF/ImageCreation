@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Image Creator UI</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="alternate icon" href="/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Material+Symbols+Outlined" rel="stylesheet">
@@ -40,6 +42,7 @@
           <div class="textarea-wrapper">
             <textarea id="prompt" rows="3" placeholder="e.g. a cozy cabin in the woods, cinematic lighting"></textarea>
           </div>
+          <div id="tokenInfo" class="caption" style="margin-top:4px; opacity:0.8;"></div>
         </div>
 
         <div class="composer-row">
@@ -49,12 +52,17 @@
               <option value="low">Low (512, 4 steps)</option>
               <option value="medium" selected>Medium (512, 12 steps)</option>
               <option value="high">High (640, 16 steps)</option>
+              <option value="high_wide">High Wide (16:10)</option>
               <option value="custom">Custom…</option>
             </select>
           </div>
           <label class="checkbox">
             <input type="checkbox" id="storeLocal" checked />
             <span>Store image locally</span>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="writeMetadata" checked />
+            <span>Save metadata file</span>
           </label>
 
           <div class="actions">
@@ -103,6 +111,6 @@
 
   
 
-  <script src="main.js?v=2" type="module"></script>
+  <script src="main.js?v=3" type="module"></script>
 </body>
 </html>
