@@ -1,16 +1,18 @@
-# server.py
+"""
+FastAPI server for image generation API.
+Provides OpenAI-style endpoints for text-to-image generation.
+"""
+
 from fastapi import FastAPI
-from diffusers import FluxPipeline, DiffusionPipeline
-import torch
-import base64
-from io import BytesIO
-from PIL import Image
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
-from dotenv import load_dotenv
-import asyncio
-from fastapi.middleware.cors import CORSMiddleware
+import base64
+from io import BytesIO
 from datetime import datetime
+from dotenv import load_dotenv
+
+from image_generation import ImageGenerator, GenerationConfig
 
 app = FastAPI()
 
@@ -25,7 +27,8 @@ app.add_middleware(
 
 # Load environment variables (for HF token and model selection)
 load_dotenv()
-# Keep token from env for security; other knobs are configured below.
+
+# Get Hugging Face token
 hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_ACCESS_TOKEN")
 if hf_token:
     suffix = hf_token[-4:]
@@ -33,72 +36,37 @@ if hf_token:
 else:
     print("[Auth] Hugging Face token missing — set HUGGINGFACE_HUB_TOKEN or HF_ACCESS_TOKEN")
 
-# Centralized, code-based configuration (no env vars needed)
-CONFIG = {
-    # Snapshot/cache controls (leave None to use defaults)
-    "CACHE_DIR": None,           # e.g., os.path.expanduser("~/.cache/huggingface")
-    "REVISION": None,            # e.g., "main" or a specific commit/tag
-    "VARIANT": None,             # e.g., "fp16"
+# Create generation configuration
+config = GenerationConfig(
+    cache_dir=None,  # e.g., os.path.expanduser("~/.cache/huggingface")
+    revision=None,  # e.g., "main" or a specific commit/tag
+    variant=None,  # e.g., "fp16"
+    dtype="bfloat16",  # "bfloat16" or "fp16"
+    generator_device="cpu",  # "cpu" | "auto" | "mps" | "cuda"
+    enable_slicing=True,
+    enable_vae_tiling=True,
+    enable_cpu_offload=False,
+    preload_models=False,
+)
 
-    # Precision and RNG device
-    "DTYPE": "bfloat16",        # "bfloat16" or "fp16"
-    "GENERATOR_DEVICE": "cpu",  # "cpu" | "auto" | "mps" | "cuda"
+# Initialize image generator
+generator = ImageGenerator(config=config, hf_token=hf_token)
 
-    # Performance/memory trade-offs
-    "ENABLE_SLICING": True,
-    "ENABLE_VAE_TILING": True,
-    # CPU offload can be enabled if memory-constrained (will slow down inference)
-    "ENABLE_CPU_OFFLOAD": False,
-
-    # Preload all AVAILABLE_MODELS at startup (set to False to save memory)
-    "PRELOAD_MODELS": False,
-}
-
-# Unpack CONFIG for convenience
-cache_dir = CONFIG["CACHE_DIR"]
-model_revision = CONFIG["REVISION"]
-model_variant = CONFIG["VARIANT"]
-dtype_pref = CONFIG["DTYPE"].lower()
-generator_device_pref = CONFIG["GENERATOR_DEVICE"].lower()
-enable_slicing = CONFIG["ENABLE_SLICING"]
-enable_vae_tiling = CONFIG["ENABLE_VAE_TILING"]
-enable_cpu_offload = CONFIG["ENABLE_CPU_OFFLOAD"]
-preload_models = CONFIG["PRELOAD_MODELS"]
-
-# Centralized model registry. Keys are friendly names users can switch at runtime.
-# Format: {"key": {"id": "hf-repo", "type": "flux" | "diffusion"}}
-AVAILABLE_MODELS = {
-    "schnell": {"id": "black-forest-labs/FLUX.1-schnell", "type": "flux"},
-    "dev": {"id": "black-forest-labs/FLUX.1-dev", "type": "flux"},
-    "qwen": {"id": "Qwen/Qwen-Image", "type": "diffusion"},
-}
-
-# Select initial active model by key or explicit HF repo id via env.
+# Set initial active model from environment
 env_model_key = os.getenv("FLUX_MODEL_KEY", "schnell")
 env_model_id = os.getenv("FLUX_MODEL_ID")  # optional direct override
-if env_model_id:
-    active_model_id = env_model_id
-    active_model_type = "flux"  # default to flux for custom models
-    active_model_key = next((k for k, v in AVAILABLE_MODELS.items() if v["id"] == env_model_id), None) or "custom"
-else:
-    model_config = AVAILABLE_MODELS.get(env_model_key, AVAILABLE_MODELS["schnell"])
-    active_model_id = model_config["id"]
-    active_model_type = model_config["type"]
-    active_model_key = env_model_key if env_model_key in AVAILABLE_MODELS else "schnell"
+generator.set_active_model(model_key=env_model_key, model_id=env_model_id)
 
-# Choose device and dtype
-device = torch.device("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))
-if dtype_pref == "bfloat16":
-    dtype = torch.bfloat16
-else:
-    dtype = torch.float16 if device.type in ("cuda", "mps") else torch.float32
+# Optionally preload models
+generator.preload_models()
 
 @app.get("/")
 def root():
+    model_info = generator.get_active_model_info()
     return {
         "status": "ok",
         "message": "Image Creator API",
-        "model": {"active_key": active_model_key, "active_id": active_model_id, "active_type": active_model_type},
+        "model": {"active_key": model_info.key, "active_id": model_info.id, "active_type": model_info.type},
         "endpoints": [
             {"method": "POST", "path": "/v1/images/generations", "body": {"prompt": "..."}},
             {"method": "GET", "path": "/v1/models"},
@@ -111,147 +79,30 @@ def root():
 def health():
     return {"status": "ok"}
 
-_pipelines_cache = {}
-_model_lock = asyncio.Lock()
-
-def _build_pipeline(model_id: str, model_type: str = "flux"):
-    kwargs = {
-        "torch_dtype": dtype,
-        "token": hf_token,
-    }
-    if cache_dir:
-        kwargs["cache_dir"] = cache_dir
-    if model_revision:
-        kwargs["revision"] = model_revision
-    if model_variant:
-        kwargs["variant"] = model_variant
-    print(
-        f"[Model] Loading pipeline: id={model_id}, type={model_type}, device={device}, dtype={dtype}, "
-        f"cache_dir={cache_dir or 'default'}, revision={model_revision or 'latest'}, variant={model_variant or 'default'}"
-    )
-    
-    # Choose the appropriate pipeline class based on model type
-    if model_type == "flux":
-        pipe = FluxPipeline.from_pretrained(model_id, **kwargs)
-    else:
-        kwargs.setdefault("trust_remote_code", True)
-        pipe = DiffusionPipeline.from_pretrained(model_id, **kwargs)
-    
-    try:
-        pipe.to(device)
-    except Exception:
-        pass
-    
-    # Apply optimizations (only if supported by the pipeline)
-    if enable_slicing and hasattr(pipe, 'enable_attention_slicing'):
-        pipe.enable_attention_slicing()
-    if enable_vae_tiling and hasattr(pipe, 'enable_vae_tiling'):
-        pipe.enable_vae_tiling()
-    if enable_cpu_offload and hasattr(pipe, 'enable_model_cpu_offload'):
-        pipe.enable_model_cpu_offload()
-    return pipe
-
-def get_active_pipeline():
-    pipe = _pipelines_cache.get(active_model_id)
-    if pipe is None:
-        pipe = _build_pipeline(active_model_id, active_model_type)
-        _pipelines_cache[active_model_id] = pipe
-    return pipe
-
-# Optionally preload all available models at startup to avoid first-request latency
-if preload_models:
-    try:
-        for k, model_config in AVAILABLE_MODELS.items():
-            mid = model_config["id"]
-            mtype = model_config["type"]
-            if mid not in _pipelines_cache:
-                print(f"[Model] Preloading model: key={k}, id={mid}, type={mtype}")
-                _pipelines_cache[mid] = _build_pipeline(mid, mtype)
-        print("[Model] Preload complete")
-    except Exception as e:
-        print(f"[Model] Preload failed: {e}")
-
-def _round_to_multiple(x: int, multiple: int = 64) -> int:
-    if x <= 0:
-        return multiple
-    return (x // multiple) * multiple
-
-def _try_generate(pipe, *, prompt: str, height: int, width: int, steps: int,
-                  guidance: float, max_seq_len: int, generator: torch.Generator, model_type: str = "flux"):
-    # Build kwargs based on what the pipeline supports
-    kwargs = {
-        "prompt": prompt,
-        "num_inference_steps": steps,
-        "generator": generator,
-    }
-    
-    # FLUX models support these parameters
-    if model_type == "flux":
-        kwargs["height"] = height
-        kwargs["width"] = width
-        kwargs["guidance_scale"] = guidance
-        kwargs["max_sequence_length"] = max_seq_len
-    # Qwen-Image uses true_cfg_scale instead of guidance_scale
-    elif model_type == "diffusion" and "Qwen" in str(pipe.__class__.__name__):
-        kwargs["height"] = height
-        kwargs["width"] = width
-        kwargs["true_cfg_scale"] = guidance  # Qwen uses true_cfg_scale
-        kwargs["negative_prompt"] = " "  # Required for CFG to work
-    # Generic diffusion models typically support height/width
-    else:
-        kwargs["height"] = height
-        kwargs["width"] = width
-        # Only add guidance_scale if the pipeline supports it
-        if hasattr(pipe, 'guidance_scale') or 'guidance_scale' in str(pipe.__class__.__init__.__code__.co_varnames):
-            kwargs["guidance_scale"] = guidance
-    
-    return pipe(**kwargs).images
-
 @app.get("/v1/models")
 def list_models():
+    model_info = generator.get_active_model_info()
+    device_info = generator.get_device_info()
     return {
-        "available": AVAILABLE_MODELS,
-        "active": {"key": active_model_key, "id": active_model_id, "type": active_model_type},
-        "device": str(device),
-        "dtype": str(dtype),
-        "cache_dir": cache_dir,
-        "revision": model_revision,
-        "variant": model_variant,
+        "available": generator.AVAILABLE_MODELS,
+        "active": {"key": model_info.key, "id": model_info.id, "type": model_info.type},
+        **device_info,
     }
 
 @app.post("/v1/models/select")
 async def select_model(request: dict):
-    global active_model_id, active_model_key, active_model_type
     candidate = (request.get("model") or "").strip()
     if not candidate:
-        return {"error": "model is required", "available": list(AVAILABLE_MODELS.keys())}
-
-    if candidate in AVAILABLE_MODELS:
-        model_config = AVAILABLE_MODELS[candidate]
-        new_model_id = model_config["id"]
-        new_model_type = model_config["type"]
-        new_model_key = candidate
-    else:
-        new_model_id = candidate
-        new_model_type = "flux"  # default to flux for custom models
-        new_model_key = next((k for k, v in AVAILABLE_MODELS.items() if v["id"] == candidate), None) or "custom"
-
-    # Atomically switch: ensure pipeline exists and then set active
-    async with _model_lock:
-        if new_model_id not in _pipelines_cache:
-            _pipelines_cache[new_model_id] = _build_pipeline(new_model_id, new_model_type)
-        active_model_id = new_model_id
-        active_model_key = new_model_key
-        active_model_type = new_model_type
-
-    print(
-        f"[Model] Switched active model: key={active_model_key}, id={active_model_id}, type={active_model_type}, "
-        f"device={device}, dtype={dtype}"
-    )
-
+        return {"error": "model is required", "available": list(generator.AVAILABLE_MODELS.keys())}
+    
+    success, message, model_info = await generator.switch_model(candidate)
+    
+    if not success:
+        return {"error": message, "available": list(generator.AVAILABLE_MODELS.keys())}
+    
     return {
         "ok": True,
-        "active": {"key": active_model_key, "id": active_model_id},
+        "active": {"key": model_info.key, "id": model_info.id},
     }
 
 @app.post("/v1/images/generations")
@@ -263,87 +114,25 @@ async def generate_image(request: dict):
     store_local = bool(request.get("store_local", True))
 
     # Optional generation parameters with fast defaults (tuned for M1 32GB)
-    # Defaults chosen for responsiveness; increase via request body if desired
     height = int(request.get("height", 512))
     width = int(request.get("width", 512))
     num_inference_steps = int(request.get("num_inference_steps", 4))
     guidance_scale = float(request.get("guidance_scale", 3.5))
     max_sequence_length = int(request.get("max_sequence_length", 256))
     seed = request.get("seed")
+    if seed is not None:
+        seed = int(seed)
 
-    # Build a device-appropriate generator (configurable)
-    if generator_device_pref == "cpu":
-        gen_device = "cpu"
-    elif generator_device_pref in ("mps", "cuda"):
-        gen_device = generator_device_pref
-    else:
-        gen_device = device.type if device.type in ("cuda", "mps") else "cpu"
-    generator = torch.Generator(gen_device)
-    if isinstance(seed, int):
-        generator = generator.manual_seed(seed)
-    else:
-        generator = generator.manual_seed(42)
-
-    # Generate image using the active pipeline (snapshot under lock)
-    async with _model_lock:
-        current_model_id = active_model_id
-        current_model_type = active_model_type
-        pipe = _pipelines_cache.get(current_model_id)
-        if pipe is None:
-            pipe = _build_pipeline(current_model_id, current_model_type)
-            _pipelines_cache[current_model_id] = pipe
-        model_key_snapshot = active_model_key
-    print(f"[Gen] Using model: key={model_key_snapshot}, id={current_model_id}, type={current_model_type}")
-    fallback_applied = False
-    original_params = {
-        "height": height,
-        "width": width,
-        "num_inference_steps": num_inference_steps,
-    }
-    try:
-        images = _try_generate(
-            pipe,
-            prompt=prompt,
-            height=height,
-            width=width,
-            steps=num_inference_steps,
-            guidance=guidance_scale,
-            max_seq_len=max_sequence_length,
-            generator=generator,
-            model_type=current_model_type,
-        )
-    except RuntimeError as e:
-        msg = str(e)
-        # Handle MPS OOM by retrying at reduced resolution and enabling cpu offload if available
-        if device.type == "mps" and "MPS backend out of memory" in msg:
-            try:
-                # Reduce resolution by half (rounded to multiple of 64)
-                fallback_h = max(256, _round_to_multiple(height // 2))
-                fallback_w = max(256, _round_to_multiple(width // 2))
-                # Opportunistically enable cpu offload just for this pipe
-                try:
-                    pipe.enable_model_cpu_offload()
-                except Exception:
-                    pass
-                images = _try_generate(
-                    pipe,
-                    prompt=prompt,
-                    height=fallback_h,
-                    width=fallback_w,
-                    steps=max(8, num_inference_steps - 4),
-                    guidance=guidance_scale,
-                    max_seq_len=max_sequence_length,
-                    generator=generator,
-                    model_type=current_model_type,
-                )
-                # Informative note in response params below
-                height, width, num_inference_steps = fallback_h, fallback_w, max(8, num_inference_steps - 4)
-                fallback_applied = True
-            except Exception as e2:
-                raise e2
-        else:
-            raise
-    img = images[0]
+    # Generate image using the generator
+    img, fallback_applied, original_params = await generator.generate(
+        prompt=prompt,
+        height=height,
+        width=width,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        max_sequence_length=max_sequence_length,
+        seed=seed,
+    )
     
     # Optionally store locally
     saved_path = None
@@ -356,26 +145,23 @@ async def generate_image(request: dict):
         except Exception:
             saved_path = None
     
-    # Convertir a base64
+    # Convert to base64
     buffer = BytesIO()
     img.save(buffer, format="PNG")
     img_str = base64.b64encode(buffer.getvalue()).decode()
     
-    # MPS may require sync before returning to avoid unexpected stalls in high-throughput usage
-    if device.type == "mps":
-        try:
-            torch.mps.synchronize()
-        except Exception:
-            pass
+    # Get current model and device info
+    model_info = generator.get_active_model_info()
+    device_info = generator.get_device_info()
 
     return {
         "data": [{
             "b64_json": img_str,
             **({"saved_path": saved_path} if saved_path else {}),
-            "model": active_model_id,
-            "model_key": active_model_key,
-            "device": str(device),
-            "dtype": str(dtype),
+            "model": model_info.id,
+            "model_key": model_info.key,
+            "device": device_info["device"],
+            "dtype": device_info["dtype"],
             "params": {
                 "height": height,
                 "width": width,
