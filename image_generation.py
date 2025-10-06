@@ -7,6 +7,7 @@ from diffusers import FluxPipeline, DiffusionPipeline
 import torch
 import gc
 import asyncio
+import time
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
@@ -323,7 +324,7 @@ class ImageGenerator:
         guidance_scale: float = 3.5,
         max_sequence_length: int = 256,
         seed: Optional[int] = None,
-    ) -> Tuple[Any, bool, Dict[str, int]]:
+    ) -> Tuple[Any, bool, Dict[str, int], Dict[str, float]]:
         """
         Generate an image from a text prompt.
         
@@ -337,8 +338,10 @@ class ImageGenerator:
             seed: Random seed (None for random)
             
         Returns:
-            Tuple of (image, fallback_applied, original_params)
+            Tuple of (image, fallback_applied, original_params, timing_metrics)
         """
+        start_time = time.time()
+        
         # Build a device-appropriate generator
         gen_device_pref = self.config.generator_device.lower()
         if gen_device_pref == "cpu":
@@ -364,6 +367,7 @@ class ImageGenerator:
                 self._pipelines_cache[current_model_id] = pipe
             model_key_snapshot = self.active_model_key
         
+        pipeline_load_time = time.time() - start_time
         print(f"[Gen] Using model: key={model_key_snapshot}, id={current_model_id}, type={current_model_type}")
         
         fallback_applied = False
@@ -373,6 +377,8 @@ class ImageGenerator:
             "num_inference_steps": num_inference_steps,
         }
         
+        # Start generation timing
+        generation_start = time.time()
         try:
             images = self._try_generate(
                 pipe,
@@ -417,6 +423,8 @@ class ImageGenerator:
             else:
                 raise
         
+        generation_time = time.time() - generation_start
+        
         img = images[0]
         
         # MPS may require sync before returning to avoid unexpected stalls in high-throughput usage
@@ -426,7 +434,19 @@ class ImageGenerator:
             except Exception:
                 pass
         
-        return img, fallback_applied, original_params
+        # Calculate total time and build metrics
+        total_time = time.time() - start_time
+        timing_metrics = {
+            "total_seconds": round(total_time, 3),
+            "pipeline_load_seconds": round(pipeline_load_time, 3),
+            "generation_seconds": round(generation_time, 3),
+        }
+        
+        print(f"[Timing] Total: {timing_metrics['total_seconds']}s, "
+              f"Pipeline: {timing_metrics['pipeline_load_seconds']}s, "
+              f"Generation: {timing_metrics['generation_seconds']}s")
+        
+        return img, fallback_applied, original_params, timing_metrics
     
     def get_device_info(self) -> Dict[str, str]:
         """Get information about the current device configuration."""

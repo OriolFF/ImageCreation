@@ -11,6 +11,7 @@ import base64
 from io import BytesIO
 from datetime import datetime
 from dotenv import load_dotenv
+import time
 
 from image_generation import ImageGenerator, GenerationConfig
 
@@ -138,7 +139,7 @@ async def generate_image(request: dict):
         seed = int(seed)
 
     # Generate image using the generator
-    img, fallback_applied, original_params = await generator.generate(
+    img, fallback_applied, original_params, timing_metrics = await generator.generate(
         prompt=prompt,
         height=height,
         width=width,
@@ -149,6 +150,7 @@ async def generate_image(request: dict):
     )
     
     # Optionally store locally
+    save_start = time.time()
     saved_path = None
     if store_local:
         os.makedirs("outputs", exist_ok=True)
@@ -158,11 +160,18 @@ async def generate_image(request: dict):
             img.save(saved_path, format="PNG")
         except Exception:
             saved_path = None
+    save_time = time.time() - save_start
     
     # Convert to base64
+    encode_start = time.time()
     buffer = BytesIO()
     img.save(buffer, format="PNG")
     img_str = base64.b64encode(buffer.getvalue()).decode()
+    encode_time = time.time() - encode_start
+    
+    # Add server-side timing to metrics
+    timing_metrics["save_seconds"] = round(save_time, 3)
+    timing_metrics["encode_seconds"] = round(encode_time, 3)
     
     # Get current model and device info
     model_info = generator.get_active_model_info()
@@ -186,6 +195,7 @@ async def generate_image(request: dict):
                 "fallback_applied": fallback_applied,
                 **({"original_params": original_params} if fallback_applied else {}),
             },
+            "timing": timing_metrics,
         }]
     }
 
