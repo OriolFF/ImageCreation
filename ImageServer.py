@@ -58,11 +58,12 @@ config = GenerationConfig(
     enable_vae_tiling=get_bool_env("FLUX_ENABLE_VAE_TILING", True),
     enable_cpu_offload=get_bool_env("FLUX_ENABLE_CPU_OFFLOAD", False),
     preload_models=get_bool_env("FLUX_PRELOAD_MODELS", False),
+    warmup_enable=get_bool_env("FLUX_WARMUP_ENABLE", False),
 )
 
 print(f"[Config] Loaded configuration: dtype={config.dtype}, generator_device={config.generator_device}, "
       f"slicing={config.enable_slicing}, vae_tiling={config.enable_vae_tiling}, "
-      f"cpu_offload={config.enable_cpu_offload}, preload={config.preload_models}")
+      f"cpu_offload={config.enable_cpu_offload}, preload={config.preload_models}, warmup={config.warmup_enable}")
 
 # Initialize image generator
 generator = ImageGenerator(config=config, hf_token=hf_token)

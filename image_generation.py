@@ -24,6 +24,7 @@ class GenerationConfig:
     enable_vae_tiling: bool = True
     enable_cpu_offload: bool = False
     preload_models: bool = False
+    warmup_enable: bool = False
 
 
 @dataclass
@@ -162,6 +163,82 @@ class ImageGenerator:
         
         print("[Cleanup] Pipeline cleanup complete")
     
+    def _warmup_pipeline(self, pipe, model_id: str, model_type: str):
+        """
+        Warm up a pipeline with a dummy generation.
+        
+        WHY WARMUP IS USEFUL:
+        The first generation after loading a model is often much slower than subsequent ones because:
+        - PyTorch needs to compile/optimize operations on first run
+        - GPU memory allocation happens lazily
+        - MPS (Metal) backend needs to build shader pipelines
+        - Various caches need to be populated
+        
+        SOLUTION:
+        Run a low-resolution, single-step dummy generation immediately after loading.
+        This "warms up" all internal caches and optimizations, so real user requests
+        get consistent, fast performance from the start.
+        
+        EXAMPLE BEHAVIOR:
+        Without warmup:
+          [Gen] First request: 8.5s  ← SLOW
+          [Gen] Second request: 2.1s ← Fast
+        
+        With warmup:
+          [Warmup] Running warmup... (1.5s)
+          [Gen] First request: 2.0s  ← Fast from the start!
+        
+        Args:
+            pipe: The pipeline to warm up
+            model_id: Model identifier for logging
+            model_type: Type of model (flux/diffusion)
+        """
+        if not self.config.warmup_enable:
+            return
+        
+        print(f"[Warmup] Starting warmup for model: {model_id}")
+        warmup_start = time.time()
+        
+        try:
+            # Create a simple generator for warmup
+            gen_device = self.device.type if self.device.type in ("cuda", "mps") else "cpu"
+            generator = torch.Generator(gen_device).manual_seed(42)
+            
+            # Run a minimal generation (256x256, 1 step)
+            warmup_kwargs = {
+                "prompt": "warmup",
+                "num_inference_steps": 1,
+                "generator": generator,
+            }
+            
+            # Add model-specific parameters
+            if model_type == "flux":
+                warmup_kwargs["height"] = 256
+                warmup_kwargs["width"] = 256
+                warmup_kwargs["guidance_scale"] = 0.0  # Minimal guidance for speed
+                warmup_kwargs["max_sequence_length"] = 64  # Short sequence
+            elif model_type == "diffusion":
+                warmup_kwargs["height"] = 256
+                warmup_kwargs["width"] = 256
+            
+            # Execute warmup generation (result is discarded)
+            _ = pipe(**warmup_kwargs)
+            
+            # Sync device if needed
+            if self.device.type == "mps":
+                try:
+                    torch.mps.synchronize()
+                except Exception:
+                    pass
+            elif self.device.type == "cuda":
+                torch.cuda.synchronize()
+            
+            warmup_duration = time.time() - warmup_start
+            print(f"[Warmup] Completed in {warmup_duration:.2f}s - Pipeline ready for fast inference")
+            
+        except Exception as e:
+            print(f"[Warmup] Warning: Warmup failed ({e}), continuing anyway")
+    
     def _build_pipeline(self, model_id: str, model_type: str = "flux"):
         """Build and configure a diffusion pipeline."""
         kwargs = {
@@ -200,6 +277,9 @@ class ImageGenerator:
             pipe.enable_vae_tiling()
         if self.config.enable_cpu_offload and hasattr(pipe, 'enable_model_cpu_offload'):
             pipe.enable_model_cpu_offload()
+        
+        # Warm up the pipeline if enabled
+        self._warmup_pipeline(pipe, model_id, model_type)
         
         return pipe
     
