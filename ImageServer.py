@@ -86,6 +86,7 @@ def root():
             {"method": "POST", "path": "/v1/images/generations", "body": {"prompt": "..."}},
             {"method": "GET", "path": "/v1/models"},
             {"method": "POST", "path": "/v1/models/select", "body": {"model": "schnell|dev|qwen|<hf-repo>"}},
+            {"method": "GET", "path": "/metrics"},
             {"method": "GET", "path": "/health"}
         ],
     }
@@ -93,6 +94,11 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.get("/metrics")
+def metrics():
+    """Get generation metrics and statistics."""
+    return generator.get_metrics()
 
 @app.get("/v1/models")
 def list_models():

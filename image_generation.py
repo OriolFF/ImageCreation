@@ -75,6 +75,16 @@ class ImageGenerator:
         self.active_model_type: Optional[str] = None
         self.active_model_key: Optional[str] = None
         
+        # Metrics tracking
+        self._metrics = {
+            "total_generations": 0,
+            "successful_generations": 0,
+            "failed_generations": 0,
+            "fallback_generations": 0,
+            "total_generation_time": 0.0,
+            "model_switches": 0,
+        }
+        
         print(f"[ImageGenerator] Initialized with device={self.device}, dtype={self.dtype}")
     
     def set_active_model(self, model_key: Optional[str] = None, model_id: Optional[str] = None):
@@ -256,6 +266,9 @@ class ImageGenerator:
             self.active_model_key = new_model_key
             self.active_model_type = new_model_type
         
+        # Track model switch
+        self._metrics["model_switches"] += 1
+        
         print(
             f"[Model] Switched active model: key={self.active_model_key}, id={self.active_model_id}, "
             f"type={self.active_model_type}, device={self.device}, dtype={self.dtype}"
@@ -341,6 +354,7 @@ class ImageGenerator:
             Tuple of (image, fallback_applied, original_params, timing_metrics)
         """
         start_time = time.time()
+        self._metrics["total_generations"] += 1
         
         # Build a device-appropriate generator
         gen_device_pref = self.config.generator_device.lower()
@@ -442,6 +456,12 @@ class ImageGenerator:
             "generation_seconds": round(generation_time, 3),
         }
         
+        # Update metrics
+        self._metrics["successful_generations"] += 1
+        if fallback_applied:
+            self._metrics["fallback_generations"] += 1
+        self._metrics["total_generation_time"] += total_time
+        
         print(f"[Timing] Total: {timing_metrics['total_seconds']}s, "
               f"Pipeline: {timing_metrics['pipeline_load_seconds']}s, "
               f"Generation: {timing_metrics['generation_seconds']}s")
@@ -478,4 +498,14 @@ class ImageGenerator:
                 "loaded_models": list(self._pipelines_cache.keys()),
                 "num_cached_pipelines": len(self._pipelines_cache),
             }
+        }
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get generation metrics and statistics."""
+        avg_time = (self._metrics["total_generation_time"] / self._metrics["successful_generations"] 
+                   if self._metrics["successful_generations"] > 0 else 0.0)
+        
+        return {
+            **self._metrics,
+            "average_generation_time": round(avg_time, 3),
         }
