@@ -1,6 +1,6 @@
 # server.py
 from fastapi import FastAPI
-from diffusers import FluxPipeline
+from diffusers import FluxPipeline, DiffusionPipeline
 import torch
 import base64
 from io import BytesIO
@@ -27,6 +27,11 @@ app.add_middleware(
 load_dotenv()
 # Keep token from env for security; other knobs are configured below.
 hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_ACCESS_TOKEN")
+if hf_token:
+    suffix = hf_token[-4:]
+    print(f"[Auth] Hugging Face token detected (length={len(hf_token)}, suffix=***{suffix})")
+else:
+    print("[Auth] Hugging Face token missing — set HUGGINGFACE_HUB_TOKEN or HF_ACCESS_TOKEN")
 
 # Centralized, code-based configuration (no env vars needed)
 CONFIG = {
@@ -42,11 +47,11 @@ CONFIG = {
     # Performance/memory trade-offs
     "ENABLE_SLICING": True,
     "ENABLE_VAE_TILING": True,
-    # Match previous server default: enable CPU offload by default
-    "ENABLE_CPU_OFFLOAD": True,
+    # CPU offload can be enabled if memory-constrained (will slow down inference)
+    "ENABLE_CPU_OFFLOAD": False,
 
-    # Preload all AVAILABLE_MODELS at startup
-    "PRELOAD_MODELS": True,
+    # Preload all AVAILABLE_MODELS at startup (set to False to save memory)
+    "PRELOAD_MODELS": False,
 }
 
 # Unpack CONFIG for convenience
@@ -61,9 +66,11 @@ enable_cpu_offload = CONFIG["ENABLE_CPU_OFFLOAD"]
 preload_models = CONFIG["PRELOAD_MODELS"]
 
 # Centralized model registry. Keys are friendly names users can switch at runtime.
+# Format: {"key": {"id": "hf-repo", "type": "flux" | "diffusion"}}
 AVAILABLE_MODELS = {
-    "schnell": "black-forest-labs/FLUX.1-schnell",
-    "dev": "black-forest-labs/FLUX.1-dev",
+    "schnell": {"id": "black-forest-labs/FLUX.1-schnell", "type": "flux"},
+    "dev": {"id": "black-forest-labs/FLUX.1-dev", "type": "flux"},
+    "qwen": {"id": "Qwen/Qwen-Image", "type": "diffusion"},
 }
 
 # Select initial active model by key or explicit HF repo id via env.
@@ -71,9 +78,12 @@ env_model_key = os.getenv("FLUX_MODEL_KEY", "schnell")
 env_model_id = os.getenv("FLUX_MODEL_ID")  # optional direct override
 if env_model_id:
     active_model_id = env_model_id
-    active_model_key = next((k for k, v in AVAILABLE_MODELS.items() if v == env_model_id), None) or "custom"
+    active_model_type = "flux"  # default to flux for custom models
+    active_model_key = next((k for k, v in AVAILABLE_MODELS.items() if v["id"] == env_model_id), None) or "custom"
 else:
-    active_model_id = AVAILABLE_MODELS.get(env_model_key, AVAILABLE_MODELS["schnell"])
+    model_config = AVAILABLE_MODELS.get(env_model_key, AVAILABLE_MODELS["schnell"])
+    active_model_id = model_config["id"]
+    active_model_type = model_config["type"]
     active_model_key = env_model_key if env_model_key in AVAILABLE_MODELS else "schnell"
 
 # Choose device and dtype
@@ -88,11 +98,11 @@ def root():
     return {
         "status": "ok",
         "message": "Image Creator API",
-        "model": {"active_key": active_model_key, "active_id": active_model_id},
+        "model": {"active_key": active_model_key, "active_id": active_model_id, "active_type": active_model_type},
         "endpoints": [
             {"method": "POST", "path": "/v1/images/generations", "body": {"prompt": "..."}},
             {"method": "GET", "path": "/v1/models"},
-            {"method": "POST", "path": "/v1/models/select", "body": {"model": "schnell|dev|<hf-repo>"}},
+            {"method": "POST", "path": "/v1/models/select", "body": {"model": "schnell|dev|qwen|<hf-repo>"}},
             {"method": "GET", "path": "/health"}
         ],
     }
@@ -104,7 +114,7 @@ def health():
 _pipelines_cache = {}
 _model_lock = asyncio.Lock()
 
-def _build_pipeline(model_id: str) -> FluxPipeline:
+def _build_pipeline(model_id: str, model_type: str = "flux"):
     kwargs = {
         "torch_dtype": dtype,
         "token": hf_token,
@@ -116,36 +126,47 @@ def _build_pipeline(model_id: str) -> FluxPipeline:
     if model_variant:
         kwargs["variant"] = model_variant
     print(
-        f"[Model] Loading pipeline: id={model_id}, device={device}, dtype={dtype}, "
+        f"[Model] Loading pipeline: id={model_id}, type={model_type}, device={device}, dtype={dtype}, "
         f"cache_dir={cache_dir or 'default'}, revision={model_revision or 'latest'}, variant={model_variant or 'default'}"
     )
-    pipe = FluxPipeline.from_pretrained(model_id, **kwargs)
+    
+    # Choose the appropriate pipeline class based on model type
+    if model_type == "flux":
+        pipe = FluxPipeline.from_pretrained(model_id, **kwargs)
+    else:
+        kwargs.setdefault("trust_remote_code", True)
+        pipe = DiffusionPipeline.from_pretrained(model_id, **kwargs)
+    
     try:
         pipe.to(device)
     except Exception:
         pass
-    if enable_slicing:
+    
+    # Apply optimizations (only if supported by the pipeline)
+    if enable_slicing and hasattr(pipe, 'enable_attention_slicing'):
         pipe.enable_attention_slicing()
-    if enable_vae_tiling:
+    if enable_vae_tiling and hasattr(pipe, 'enable_vae_tiling'):
         pipe.enable_vae_tiling()
-    if enable_cpu_offload:
+    if enable_cpu_offload and hasattr(pipe, 'enable_model_cpu_offload'):
         pipe.enable_model_cpu_offload()
     return pipe
 
-def get_active_pipeline() -> FluxPipeline:
+def get_active_pipeline():
     pipe = _pipelines_cache.get(active_model_id)
     if pipe is None:
-        pipe = _build_pipeline(active_model_id)
+        pipe = _build_pipeline(active_model_id, active_model_type)
         _pipelines_cache[active_model_id] = pipe
     return pipe
 
 # Optionally preload all available models at startup to avoid first-request latency
 if preload_models:
     try:
-        for k, mid in AVAILABLE_MODELS.items():
+        for k, model_config in AVAILABLE_MODELS.items():
+            mid = model_config["id"]
+            mtype = model_config["type"]
             if mid not in _pipelines_cache:
-                print(f"[Model] Preloading model: key={k}, id={mid}")
-                _pipelines_cache[mid] = _build_pipeline(mid)
+                print(f"[Model] Preloading model: key={k}, id={mid}, type={mtype}")
+                _pipelines_cache[mid] = _build_pipeline(mid, mtype)
         print("[Model] Preload complete")
     except Exception as e:
         print(f"[Model] Preload failed: {e}")
@@ -155,23 +176,42 @@ def _round_to_multiple(x: int, multiple: int = 64) -> int:
         return multiple
     return (x // multiple) * multiple
 
-def _try_generate(pipe: FluxPipeline, *, prompt: str, height: int, width: int, steps: int,
-                  guidance: float, max_seq_len: int, generator: torch.Generator):
-    return pipe(
-        prompt,
-        height=height,
-        width=width,
-        num_inference_steps=steps,
-        guidance_scale=guidance,
-        max_sequence_length=max_seq_len,
-        generator=generator,
-    ).images
+def _try_generate(pipe, *, prompt: str, height: int, width: int, steps: int,
+                  guidance: float, max_seq_len: int, generator: torch.Generator, model_type: str = "flux"):
+    # Build kwargs based on what the pipeline supports
+    kwargs = {
+        "prompt": prompt,
+        "num_inference_steps": steps,
+        "generator": generator,
+    }
+    
+    # FLUX models support these parameters
+    if model_type == "flux":
+        kwargs["height"] = height
+        kwargs["width"] = width
+        kwargs["guidance_scale"] = guidance
+        kwargs["max_sequence_length"] = max_seq_len
+    # Qwen-Image uses true_cfg_scale instead of guidance_scale
+    elif model_type == "diffusion" and "Qwen" in str(pipe.__class__.__name__):
+        kwargs["height"] = height
+        kwargs["width"] = width
+        kwargs["true_cfg_scale"] = guidance  # Qwen uses true_cfg_scale
+        kwargs["negative_prompt"] = " "  # Required for CFG to work
+    # Generic diffusion models typically support height/width
+    else:
+        kwargs["height"] = height
+        kwargs["width"] = width
+        # Only add guidance_scale if the pipeline supports it
+        if hasattr(pipe, 'guidance_scale') or 'guidance_scale' in str(pipe.__class__.__init__.__code__.co_varnames):
+            kwargs["guidance_scale"] = guidance
+    
+    return pipe(**kwargs).images
 
 @app.get("/v1/models")
 def list_models():
     return {
         "available": AVAILABLE_MODELS,
-        "active": {"key": active_model_key, "id": active_model_id},
+        "active": {"key": active_model_key, "id": active_model_id, "type": active_model_type},
         "device": str(device),
         "dtype": str(dtype),
         "cache_dir": cache_dir,
@@ -181,27 +221,31 @@ def list_models():
 
 @app.post("/v1/models/select")
 async def select_model(request: dict):
-    global active_model_id, active_model_key
+    global active_model_id, active_model_key, active_model_type
     candidate = (request.get("model") or "").strip()
     if not candidate:
         return {"error": "model is required", "available": list(AVAILABLE_MODELS.keys())}
 
     if candidate in AVAILABLE_MODELS:
-        new_model_id = AVAILABLE_MODELS[candidate]
+        model_config = AVAILABLE_MODELS[candidate]
+        new_model_id = model_config["id"]
+        new_model_type = model_config["type"]
         new_model_key = candidate
     else:
         new_model_id = candidate
-        new_model_key = next((k for k, v in AVAILABLE_MODELS.items() if v == candidate), None) or "custom"
+        new_model_type = "flux"  # default to flux for custom models
+        new_model_key = next((k for k, v in AVAILABLE_MODELS.items() if v["id"] == candidate), None) or "custom"
 
     # Atomically switch: ensure pipeline exists and then set active
     async with _model_lock:
         if new_model_id not in _pipelines_cache:
-            _pipelines_cache[new_model_id] = _build_pipeline(new_model_id)
+            _pipelines_cache[new_model_id] = _build_pipeline(new_model_id, new_model_type)
         active_model_id = new_model_id
         active_model_key = new_model_key
+        active_model_type = new_model_type
 
     print(
-        f"[Model] Switched active model: key={active_model_key}, id={active_model_id}, "
+        f"[Model] Switched active model: key={active_model_key}, id={active_model_id}, type={active_model_type}, "
         f"device={device}, dtype={dtype}"
     )
 
@@ -243,12 +287,13 @@ async def generate_image(request: dict):
     # Generate image using the active pipeline (snapshot under lock)
     async with _model_lock:
         current_model_id = active_model_id
+        current_model_type = active_model_type
         pipe = _pipelines_cache.get(current_model_id)
         if pipe is None:
-            pipe = _build_pipeline(current_model_id)
+            pipe = _build_pipeline(current_model_id, current_model_type)
             _pipelines_cache[current_model_id] = pipe
         model_key_snapshot = active_model_key
-    print(f"[Gen] Using model: key={model_key_snapshot}, id={current_model_id}")
+    print(f"[Gen] Using model: key={model_key_snapshot}, id={current_model_id}, type={current_model_type}")
     fallback_applied = False
     original_params = {
         "height": height,
@@ -265,6 +310,7 @@ async def generate_image(request: dict):
             guidance=guidance_scale,
             max_seq_len=max_sequence_length,
             generator=generator,
+            model_type=current_model_type,
         )
     except RuntimeError as e:
         msg = str(e)
@@ -288,6 +334,7 @@ async def generate_image(request: dict):
                     guidance=guidance_scale,
                     max_seq_len=max_sequence_length,
                     generator=generator,
+                    model_type=current_model_type,
                 )
                 # Informative note in response params below
                 height, width, num_inference_steps = fallback_h, fallback_w, max(8, num_inference_steps - 4)

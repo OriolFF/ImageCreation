@@ -270,7 +270,7 @@ Startup configuration (environment variables):
 
 ```bash
 # choose a registry key (default: schnell)
-export FLUX_MODEL_KEY=schnell   # or dev
+export FLUX_MODEL_KEY=schnell   # schnell, dev, or qwen
 
 # or force a specific model repo (overrides key and marks as custom)
 export FLUX_MODEL_ID=black-forest-labs/FLUX.1-dev
@@ -278,6 +278,11 @@ export FLUX_MODEL_ID=black-forest-labs/FLUX.1-dev
 # optional: enable CPU offload if memory-constrained
 export FLUX_ENABLE_CPU_OFFLOAD=1
 ```
+
+**Available Models:**
+- `schnell`: FLUX.1-schnell (fast inference, 4 steps)
+- `dev`: FLUX.1-dev (higher quality, more steps)
+- `qwen`: Qwen-Image (Apache 2.0, excellent text rendering, especially Chinese)
 
 ### Web UI model selector
 
