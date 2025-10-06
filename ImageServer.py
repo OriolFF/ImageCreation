@@ -36,18 +36,32 @@ if hf_token:
 else:
     print("[Auth] Hugging Face token missing — set HUGGINGFACE_HUB_TOKEN or HF_ACCESS_TOKEN")
 
-# Create generation configuration
+# Helper function to parse boolean env vars
+def get_bool_env(key: str, default: bool) -> bool:
+    """Parse boolean environment variable (1/0, true/false, yes/no)."""
+    value = os.getenv(key, "").lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    elif value in ("0", "false", "no", "off"):
+        return False
+    return default
+
+# Create generation configuration from environment variables
 config = GenerationConfig(
-    cache_dir=None,  # e.g., os.path.expanduser("~/.cache/huggingface")
-    revision=None,  # e.g., "main" or a specific commit/tag
-    variant=None,  # e.g., "fp16"
-    dtype="bfloat16",  # "bfloat16" or "fp16"
-    generator_device="cpu",  # "cpu" | "auto" | "mps" | "cuda"
-    enable_slicing=True,
-    enable_vae_tiling=True,
-    enable_cpu_offload=False,
-    preload_models=False,
+    cache_dir=os.getenv("FLUX_CACHE_DIR") or None,
+    revision=os.getenv("FLUX_REVISION") or None,
+    variant=os.getenv("FLUX_VARIANT") or None,
+    dtype=os.getenv("FLUX_DTYPE", "bfloat16"),
+    generator_device=os.getenv("FLUX_GENERATOR_DEVICE", "cpu"),
+    enable_slicing=get_bool_env("FLUX_ENABLE_SLICING", True),
+    enable_vae_tiling=get_bool_env("FLUX_ENABLE_VAE_TILING", True),
+    enable_cpu_offload=get_bool_env("FLUX_ENABLE_CPU_OFFLOAD", False),
+    preload_models=get_bool_env("FLUX_PRELOAD_MODELS", False),
 )
+
+print(f"[Config] Loaded configuration: dtype={config.dtype}, generator_device={config.generator_device}, "
+      f"slicing={config.enable_slicing}, vae_tiling={config.enable_vae_tiling}, "
+      f"cpu_offload={config.enable_cpu_offload}, preload={config.preload_models}")
 
 # Initialize image generator
 generator = ImageGenerator(config=config, hf_token=hf_token)
