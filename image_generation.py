@@ -437,3 +437,25 @@ class ImageGenerator:
             "revision": self.config.revision,
             "variant": self.config.variant,
         }
+    
+    def get_full_config(self) -> Dict[str, Any]:
+        """Get complete configuration snapshot including runtime settings."""
+        return {
+            "device": str(self.device),
+            "dtype": str(self.dtype),
+            "config": {
+                "cache_dir": self.config.cache_dir,
+                "revision": self.config.revision,
+                "variant": self.config.variant,
+                "dtype_config": self.config.dtype,
+                "generator_device": self.config.generator_device,
+                "enable_slicing": self.config.enable_slicing,
+                "enable_vae_tiling": self.config.enable_vae_tiling,
+                "enable_cpu_offload": self.config.enable_cpu_offload,
+                "preload_models": self.config.preload_models,
+            },
+            "cache": {
+                "loaded_models": list(self._pipelines_cache.keys()),
+                "num_cached_pipelines": len(self._pipelines_cache),
+            }
+        }

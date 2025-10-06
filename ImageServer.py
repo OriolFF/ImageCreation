@@ -96,11 +96,11 @@ def health():
 @app.get("/v1/models")
 def list_models():
     model_info = generator.get_active_model_info()
-    device_info = generator.get_device_info()
+    full_config = generator.get_full_config()
     return {
         "available": generator.AVAILABLE_MODELS,
         "active": {"key": model_info.key, "id": model_info.id, "type": model_info.type},
-        **device_info,
+        "runtime": full_config,
     }
 
 @app.post("/v1/models/select")
