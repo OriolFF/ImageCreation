@@ -259,11 +259,29 @@ class ImageGenerator:
         )
         
         # Choose the appropriate pipeline class based on model type
-        if model_type == "flux":
-            pipe = FluxPipeline.from_pretrained(model_id, **kwargs)
-        else:
-            kwargs.setdefault("trust_remote_code", True)
-            pipe = DiffusionPipeline.from_pretrained(model_id, **kwargs)
+        try:
+            if model_type == "flux":
+                pipe = FluxPipeline.from_pretrained(model_id, **kwargs)
+            else:
+                kwargs.setdefault("trust_remote_code", True)
+                pipe = DiffusionPipeline.from_pretrained(model_id, **kwargs)
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Check for authentication/permission errors
+            if "403" in error_msg or "forbidden" in error_msg or "unauthorized" in error_msg:
+                print(f"\n{'='*70}")
+                print(f"[ERROR] Authentication failed for model: {model_id}")
+                print(f"{'='*70}")
+                print(f"This model requires:")
+                print(f"  1. A valid Hugging Face token")
+                print(f"  2. Accepting the model license at: https://huggingface.co/{model_id}")
+                print(f"\nSteps to fix:")
+                print(f"  1. Get a token from: https://huggingface.co/settings/tokens")
+                print(f"  2. Accept the license at: https://huggingface.co/{model_id}")
+                print(f"  3. Add to .env file: HUGGINGFACE_HUB_TOKEN=your_token_here")
+                print(f"  4. Restart the server")
+                print(f"{'='*70}\n")
+            raise
         
         try:
             pipe.to(self.device)
@@ -589,3 +607,45 @@ class ImageGenerator:
             **self._metrics,
             "average_generation_time": round(avg_time, 3),
         }
+    
+    async def release_memory(self) -> Dict[str, Any]:
+        """
+        Release all cached pipelines and free memory.
+        
+        Returns:
+            Dictionary with cleanup status and memory info
+        """
+        async with self._model_lock:
+            num_pipelines = len(self._pipelines_cache)
+            print(f"[Memory] Releasing {num_pipelines} cached pipeline(s)")
+            
+            # Clean up all cached pipelines
+            for model_id, pipe in list(self._pipelines_cache.items()):
+                print(f"[Memory] Cleaning up pipeline: {model_id}")
+                self._cleanup_pipeline(pipe)
+            
+            # Clear the cache
+            self._pipelines_cache.clear()
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Clear device cache
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            elif self.device.type == "mps":
+                try:
+                    torch.mps.empty_cache()
+                    torch.mps.synchronize()
+                except Exception as e:
+                    print(f"[Memory] Warning: MPS cache clear failed: {e}")
+            
+            print(f"[Memory] Memory release complete. Cleared {num_pipelines} pipeline(s)")
+            
+            return {
+                "status": "ok",
+                "pipelines_cleared": num_pipelines,
+                "device": str(self.device),
+                "message": f"Released {num_pipelines} cached pipeline(s) and freed device memory"
+            }

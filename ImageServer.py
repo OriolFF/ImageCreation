@@ -87,6 +87,7 @@ def root():
             {"method": "POST", "path": "/v1/images/generations", "body": {"prompt": "..."}},
             {"method": "GET", "path": "/v1/models"},
             {"method": "POST", "path": "/v1/models/select", "body": {"model": "schnell|dev|qwen|<hf-repo>"}},
+            {"method": "POST", "path": "/v1/memory/release"},
             {"method": "GET", "path": "/metrics"},
             {"method": "GET", "path": "/health"}
         ],
@@ -126,6 +127,12 @@ async def select_model(request: dict):
         "ok": True,
         "active": {"key": model_info.key, "id": model_info.id},
     }
+
+@app.post("/v1/memory/release")
+async def release_memory():
+    """Release all cached pipelines and free memory."""
+    result = await generator.release_memory()
+    return result
 
 @app.post("/v1/images/generations")
 async def generate_image(request: dict):
