@@ -32,6 +32,14 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
+On macOS/Linux, `source .venv/bin/activate` activates the environment.
+
+On Windows (PowerShell), activate it with:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
 ### Option B: Using Python venv
 
 ```bash
@@ -58,6 +66,14 @@ Start the FastAPI server (Uvicorn) from the project root:
 python3 ImageServer.py
 ```
 
+### On Windows (PowerShell)
+
+From the project root, after activating your virtual environment:
+
+```powershell
+python .\ImageServer.py
+```
+
 - Default address: `http://localhost:8000`
 - Health check: `GET /health` → `{ "status": "ok" }`
 - Root: `GET /` → basic info
@@ -80,6 +96,20 @@ python3 -m http.server 5500 -d web
 Or from the `web/` directory:
 ```bash
 python3 -m http.server 5500
+```
+
+### On Windows (PowerShell)
+
+From the project root:
+
+```powershell
+python -m http.server 5500 -d web
+```
+
+Or from the `web/` directory:
+
+```powershell
+python -m http.server 5500
 ```
 
 Then open: http://localhost:5500

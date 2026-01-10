@@ -41,8 +41,8 @@ CONFIG = {
     "VARIANT": None,             # e.g., "fp16"
 
     # Precision and RNG device
-    "DTYPE": "bfloat16",        # "bfloat16" or "fp16"
-    "GENERATOR_DEVICE": "cpu",  # "cpu" | "auto" | "mps" | "cuda"
+    "DTYPE": "bfloat16",        # "bfloat16" or "fp16" (bfloat16 is ideal for modern NVIDIA GPUs)
+    "GENERATOR_DEVICE": "cuda",  # "cpu" | "auto" | "mps" | "cuda" (use CUDA for best throughput on RTX 5080)
 
     # Performance/memory trade-offs
     "ENABLE_SLICING": True,
