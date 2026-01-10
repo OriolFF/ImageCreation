@@ -47,6 +47,15 @@ def get_bool_env(key: str, default: bool) -> bool:
         return False
     return default
 
+_port_raw = os.getenv("IMAGE_SERVER_PORT")
+try:
+    server_port = int(_port_raw) if _port_raw is not None else 8000
+    if not (0 < server_port < 65536):
+        raise ValueError
+except (TypeError, ValueError):
+    print(f"[Config] Invalid IMAGE_SERVER_PORT value '{_port_raw}', defaulting to 8000")
+    server_port = 8000
+
 # Create generation configuration from environment variables
 config = GenerationConfig(
     cache_dir=os.getenv("FLUX_CACHE_DIR") or None,
@@ -214,4 +223,4 @@ async def generate_image(request: dict):
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=server_port)

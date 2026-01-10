@@ -1,12 +1,13 @@
 # ImageCreatorApi
 
-FastAPI-based image generation server powered by Hugging Face Diffusers (`black-forest-labs/FLUX.1-schnell`) plus a simple web client in `web/`.
+FastAPI-based image generation server powered by Hugging Face Diffusers with runtime model switching, warmup, and memory management routines. A companion web client in `web/` provides an interactive front end.
 
-The server exposes an OpenAI-style endpoint at `/v1/images/generations` that accepts a text prompt and returns a base64-encoded PNG image. The web client provides a minimal UI to try it out.
+The server exposes OpenAI-style endpoints under `/v1/*`, including text-to-image generation, model management, runtime metrics, and cache cleanup. Responses now include timing details and runtime parameters to aid debugging and benchmarking.
 
 ## Project Structure
 
-- `ImageServer.py` — FastAPI app (Uvicorn entrypoint) exposing the image generation API.
+- `ImageServer.py` — FastAPI app (Uvicorn entrypoint) exposing the image generation API and wiring configuration from environment variables.
+- `image_generation.py` — Image pipeline management, model switching, warmup, metrics, and memory cleanup logic.
 - `web/` — Static web client (HTML/CSS/JS) that talks to the API at `http://localhost:8000`.
 - `requirements.txt` — Python dependencies.
 - `.gitignore` — Git ignore rules.
@@ -50,6 +51,16 @@ export HUGGINGFACE_HUB_TOKEN=hf_xxx   # or HF_ACCESS_TOKEN
 
 You can also put this in a `.env` file in the project root; `ImageServer.py` loads it with `python-dotenv`.
 
+Copy `.env.example` to `.env` to explore the full set of runtime knobs. Key optional variables include:
+
+- `FLUX_MODEL_KEY` / `FLUX_MODEL_ID` — choose the startup model by registry key (`schnell`, `dev`, `qwen`) or explicit Hugging Face repo id.
+- `FLUX_DTYPE`, `FLUX_GENERATOR_DEVICE` — control precision (`bfloat16`, `fp16`, `fp32`) and RNG device (`cpu`, `mps`, `cuda`, `auto`).
+- `FLUX_ENABLE_SLICING`, `FLUX_ENABLE_VAE_TILING`, `FLUX_ENABLE_CPU_OFFLOAD` — toggle memory/performance strategies.
+- `FLUX_PRELOAD_MODELS`, `FLUX_WARMUP_ENABLE` — preload all pipelines and run a dummy warmup pass on startup.
+- `FLUX_CACHE_DIR`, `FLUX_REVISION`, `FLUX_VARIANT` — override Hugging Face cache location, pin revisions, or pick variants.
+- `FLUX_STRUCTURED_LOGS`, `FLUX_LOG_LEVEL` — adjust logging verbosity/output format.
+- `IMAGE_SERVER_PORT` — override the FastAPI listening port (default `8000`).
+
 ## Running the Image Creator Server
 
 Start the FastAPI server (Uvicorn) from the project root:
@@ -58,11 +69,12 @@ Start the FastAPI server (Uvicorn) from the project root:
 python3 ImageServer.py
 ```
 
-- Default address: `http://localhost:8000`
+- Default address: `http://localhost:8000` (configurable via `IMAGE_SERVER_PORT`)
 - Health check: `GET /health` → `{ "status": "ok" }`
 - Root: `GET /` → basic info
 
 Notes:
+
 - On first run, model weights will be downloaded; this can take several minutes.
 - The app enables CORS for all origins in development.
 
@@ -73,16 +85,18 @@ The web client is static files under `web/`. It expects the API to be at `http:/
 ### Python built-in HTTP server (recommended)
 
 From the project root:
+
 ```bash
 python3 -m http.server 5500 -d web
 ```
 
 Or from the `web/` directory:
+
 ```bash
 python3 -m http.server 5500
 ```
 
-Then open: http://localhost:5500
+Then open: <http://localhost:5500>
 
 ### Node (optional)
 
@@ -96,23 +110,83 @@ If you change the port, the FastAPI CORS settings already allow all origins for 
 
 Base URL: `http://localhost:8000`
 
-- `POST /v1/images/generations`
-  - Request JSON body:
-    - `prompt` (string, required): text prompt for the image
-    - `store_local` (boolean, optional, default `true`): if true, server also saves the image under `outputs/`
-  - Response JSON:
-    ```json
-    {
-      "data": [
-        {
-          "b64_json": "<base64-encoded-png>",
-          "saved_path": "outputs/image_YYYYMMDD_hhmmss.png"  // present only if saved
-        }
-      ]
-    }
-    ```
+### `POST /v1/images/generations`
 
-- `GET /health` → `{ "status": "ok" }`
+Generate an image from a prompt. Optional parameters fine-tune resolution and quality.
+
+#### Request body
+
+```json
+{
+  "prompt": "cyberpunk skyline at dusk",          // required
+  "store_local": true,                            // optional, default true
+  "height": 512, "width": 512,                  // optional, defaults 512
+  "num_inference_steps": 4,                       // optional, defaults tuned per model
+  "guidance_scale": 3.5,                          // optional, defaults model-specific
+  "max_sequence_length": 256,                     // optional token budget
+  "seed": 1234                                    // optional deterministic seed
+}
+```
+
+#### Response body
+
+```json
+{
+  "data": [
+    {
+      "b64_json": "<base64-encoded-png>",
+      "saved_path": "outputs/image_20240101_120001.png",  // present when store_local is true
+      "model": "black-forest-labs/FLUX.1-schnell",
+      "model_key": "schnell",
+      "device": "mps",
+      "dtype": "torch.float16",
+      "params": {
+        "height": 512,
+        "width": 512,
+        "num_inference_steps": 4,
+        "guidance_scale": 3.5,
+        "max_sequence_length": 256,
+        "seed": 1234,
+        "fallback_applied": false
+      },
+      "timing": {
+        "load_seconds": 0.01,
+        "generation_seconds": 2.05,
+        "save_seconds": 0.04,
+        "encode_seconds": 0.02
+      }
+    }
+  ]
+}
+```
+
+### `GET /v1/models`
+
+Lists available models, the active selection, and the resolved runtime configuration snapshot. Useful for debugging environment overrides and cache state.
+
+### `POST /v1/models/select`
+
+Switch the active model by registry key or Hugging Face repo id.
+
+```json
+{
+  "model": "dev"            // e.g. "schnell", "dev", "qwen", or a repo id
+}
+```
+
+Returns `{ "ok": true, "active": { "key": "dev", "id": "black-forest-labs/FLUX.1-dev" } }` on success.
+
+### `POST /v1/memory/release`
+
+Flushes all cached pipelines, releases GPU/MPS memory, and forces garbage collection. Returns a report including how many pipelines were cleared.
+
+### `GET /metrics`
+
+Expose rolling generation counts, success/failure tallies, and aggregate timing metrics suitable for dashboards or health checks.
+
+### `GET /health`
+
+Simple readiness probe returning `{ "status": "ok" }`.
 
 ## Usage from Other Projects
 
@@ -242,18 +316,20 @@ fun main() {
 
 The server exposes endpoints to list and switch models at runtime. A small registry is built-in and you can also select a specific Hugging Face repo directly.
 
-- Built-in registry (`AVAILABLE_MODELS`):
-  - `schnell` → `black-forest-labs/FLUX.1-schnell`
-  - `dev` → `black-forest-labs/FLUX.1-dev`
+### Built-in registry
 
-Endpoints:
+- `schnell` → `black-forest-labs/FLUX.1-schnell`
+- `dev` → `black-forest-labs/FLUX.1-dev`
+- `qwen` → `Qwen/Qwen-Image`
 
-- List models
+### List available models
+
 ```bash
 curl http://localhost:8000/v1/models | jq
 ```
 
-- Select model by key or by repo id
+### Select a model by key or repo id
+
 ```bash
 # by key
 curl -X POST -H "Content-Type: application/json" \
@@ -266,7 +342,7 @@ curl -X POST -H "Content-Type: application/json" \
   http://localhost:8000/v1/models/select
 ```
 
-Startup configuration (environment variables):
+### Startup configuration snippet
 
 ```bash
 # choose a registry key (default: schnell)
@@ -279,23 +355,31 @@ export FLUX_MODEL_ID=black-forest-labs/FLUX.1-dev
 export FLUX_ENABLE_CPU_OFFLOAD=1
 ```
 
-**Available Models:**
-- `schnell`: FLUX.1-schnell (fast inference, 4 steps)
-- `dev`: FLUX.1-dev (higher quality, more steps)
-- `qwen`: Qwen-Image (Apache 2.0, excellent text rendering, especially Chinese)
+### Available Models
+
+- `schnell`: FLUX.1-schnell (fast inference, tuned defaults for speed)
+- `dev`: FLUX.1-dev (higher quality, prioritizes fidelity)
+- `qwen`: Qwen-Image (Apache 2.0, excels at typography and multilingual prompts)
 
 ### Web UI model selector
 
 The web client includes a model selector in the header. It fetches available models from `GET /v1/models` and switches with `POST /v1/models/select`.
 
-Steps:
-- Start the server: `python3 ImageServer.py`
-- Serve the web client: `python3 -m http.server 5500 -d web`
-- Open `http://localhost:5500` and use the “Model” dropdown to switch between `schnell` and `dev` (or a custom active model).
+To use the model selector:
+
+1. Start the server: `python3 ImageServer.py`
+2. Serve the web client: `python3 -m http.server 5500 -d web`
+3. Open <http://localhost:5500> and use the “Model” dropdown to switch between `schnell` and `dev` (or a custom active model).
+
+#### Web UI Runtime Controls
+
+- **Free Memory** button calls `POST /v1/memory/release` to drop cached pipelines when VRAM is low.
+- Runtime info banner surfaces active model, device, and dtype from `GET /v1/models`.
+- All actions surface toast/status messages to highlight API errors or cache flush results.
 
 ## Performance tuning and caching
 
-### Environment variables
+### Performance environment variables
 
 These env vars control performance/memory trade-offs and caching behavior:
 
@@ -319,16 +403,16 @@ export FLUX_ENABLE_CPU_OFFLOAD=0     # set to 1 to offload parts to CPU (more st
 
 # Optional: preload all AVAILABLE_MODELS at startup to avoid first-request latency
 export FLUX_PRELOAD_MODELS=0         # set to 1 to preload
-```
 
 Notes:
 - Disabling slicing/tiling may increase peak memory but improve throughput/GPU utilization.
 - CPU offload reduces GPU memory usage but can lower GPU utilization and add CPU overhead.
 - Preloading eliminates the “first generation after switching is slow” effect.
 
-### UI presets and fallback notices
+### UI Presets and Fallback Notices
 
 The web client includes a Preset selector:
+
 - Low: 512×512, 4 steps, guidance=3.0 (fastest)
 - Medium: 512×512, 12 steps, guidance=3.0 (balanced)
 - High: 640×640, 16 steps, guidance=3.5 (quality; may OOM on dev)
@@ -345,7 +429,7 @@ If the server applies a memory fallback (e.g., on MPS OOM), the UI shows a notic
 
 ## External references
 
-https://github.com/Xza85hrf/flux_pipeline
+<https://github.com/Xza85hrf/flux_pipeline>
 
 ## License
 

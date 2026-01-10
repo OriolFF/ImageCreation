@@ -76,28 +76,29 @@ This plan contains **compatibility risks**. Test each phase on a separate branch
 - [ ] **Load test**: Run concurrency benchmark on macOS (M-series) and CPU-only setups to validate throughput.
 
 ## Phase 6 — Configuration Surface ✅ **SAFE**
-- [ ] **dotenv alignment**: Extend `.env.example` with new flags (dtype/device/slicing/offload/queue/warmup).
+- [x] **dotenv alignment**: Extend `.env.example` with new flags (dtype/device/slicing/offload/queue/warmup).
   - 📍 **Location**: `.env.example` file
-- [ ] **Runtime snapshot**: Update `/v1/models` response to expose active config values (partially implemented via `get_device_info()`).
+- [x] **Runtime snapshot**: Update `/v1/models` response to expose active config values (partially implemented via `get_device_info()`).
   - 📍 **Location**: `ImageServer.py` - `/v1/models` endpoint; `image_generation.py` - expand `get_device_info()` method
-- [ ] **Config helper**: Centralize env parsing in `ImageServer.py` to keep `GenerationConfig` consistent.
+- [x] **Config helper**: Centralize env parsing in `ImageServer.py` to keep `GenerationConfig` consistent.
   - 📍 **Location**: `ImageServer.py` - config initialization section
 
 ## Phase 7 — Warmup Routine ✅ **SAFE**
-- [ ] **Config flag**: Introduce `GenerationConfig.warmup_enable` (and env override in `ImageServer.py`) for warmup control.
+- [x] **Config flag**: Introduce `GenerationConfig.warmup_enable` (and env override in `ImageServer.py`) for warmup control.
   - 📍 **Location**: `image_generation.py` - Add to `GenerationConfig` dataclass; `ImageServer.py` - config init
-- [ ] **Warmup run**: After pipeline creation/preload, execute low-resolution, single-step dummy generation when enabled.
+- [x] **Warmup run**: After pipeline creation/preload, execute low-resolution, single-step dummy generation when enabled.
   - 📍 **Location**: `image_generation.py` - Add `_warmup_pipeline()` method, call from `_build_pipeline()` or `preload_models()`
-- [ ] **Warmup logging**: Log duration and outcome per model.
+- [x] **Warmup logging**: Log duration and outcome per model.
   - 📍 **Location**: `image_generation.py` - `_warmup_pipeline()` method
 
 ## Phase 8 — Metrics & Logging ✅ **SAFE**
-- [ ] **Timing metrics**: Wrap generation path with perf counters, log total/request/save durations.
+- [x] **Timing metrics**: Wrap generation path with perf counters, log total/request/save durations.
   - 📍 **Location**: `image_generation.py` - `ImageGenerator.generate()` method; `ImageServer.py` - `/v1/images/generations` endpoint
-- [ ] **Structured logging**: Add optional JSON logging when `FLUX_STRUCTURED_LOGS=1`.
+- [x] **Structured logging**: Add optional JSON logging when `FLUX_STRUCTURED_LOGS=1`.
   - 📍 **Location**: Both `image_generation.py` and `ImageServer.py` - replace print statements with structured logger
-- [ ] **Metrics endpoint**: Consider lightweight `/metrics` exposing rolling averages or integrate with Prometheus if feasible.
+- [x] **Metrics endpoint**: Consider lightweight `/metrics` exposing rolling averages or integrate with Prometheus if feasible.
   - 📍 **Location**: `ImageServer.py` - new `/metrics` endpoint; `image_generation.py` - add metrics collection to `ImageGenerator`
+  - ℹ️ Added `/v1/memory/release` endpoint and UI control to complement cache management.
 
 ---
 
