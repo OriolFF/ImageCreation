@@ -6,6 +6,7 @@ const API_URL = `${API_BASE}/v1/images/generations`;
 const MODELS_URL = `${API_BASE}/v1/models`;
 const SELECT_MODEL_URL = `${API_BASE}/v1/models/select`;
 const CANCEL_URL = `${API_BASE}/v1/images/cancel`;
+const RELEASE_MEMORY_URL = `${API_BASE}/v1/memory/release`;
 
 // Allow long-running generations (e.g., dev model with many steps)
 // 45 minutes in ms
@@ -557,6 +558,51 @@ async function cancel() {
   }
 }
 
+async function releaseMemory() {
+  const btn = $("#releaseMemoryBtn");
+  if (!btn) return;
+  
+  // Confirm action
+  if (!confirm("Release all cached models and free memory? This will require reloading models on next generation.")) {
+    return;
+  }
+  
+  try {
+    btn.disabled = true;
+    btn.style.opacity = "0.5";
+    console.log("[UI] releaseMemory: calling API...");
+    
+    const res = await fetch(RELEASE_MEMORY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    
+    console.log("[UI] releaseMemory: response status", res.status);
+    
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status} ${text}`);
+    }
+    
+    const json = await res.json();
+    console.log("[UI] releaseMemory: result", json);
+    
+    // Show success message
+    const message = json.message || `Released ${json.pipelines_cleared || 0} cached pipeline(s)`;
+    alert(`✓ Memory released successfully!\n\n${message}`);
+    
+    // Reload models info to reflect cleared cache
+    await loadModels();
+    
+  } catch (err) {
+    console.error("[UI] releaseMemory: failed", err);
+    showError(`Failed to release memory: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.style.opacity = "1";
+  }
+}
+
 $("#generateBtn").addEventListener("click", generate);
 $("#cancelBtn").addEventListener("click", cancel);
 $("#prompt").addEventListener("keydown", (e) => {
@@ -564,3 +610,9 @@ $("#prompt").addEventListener("keydown", (e) => {
     generate();
   }
 });
+
+// Wire up memory release button
+const releaseMemoryBtn = $("#releaseMemoryBtn");
+if (releaseMemoryBtn) {
+  releaseMemoryBtn.addEventListener("click", releaseMemory);
+}
