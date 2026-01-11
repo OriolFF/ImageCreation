@@ -12,6 +12,11 @@ from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
 
+def _log(msg: str):
+    """Print with immediate flush for visibility during long operations."""
+    print(msg, flush=True)
+
+
 @dataclass
 class GenerationConfig:
     """Configuration for image generation pipeline."""
@@ -86,7 +91,7 @@ class ImageGenerator:
             "model_switches": 0,
         }
         
-        print(f"[ImageGenerator] Initialized with device={self.device}, dtype={self.dtype}")
+        _log(f"[ImageGenerator] Initialized with device={self.device}, dtype={self.dtype}")
     
     def set_active_model(self, model_key: Optional[str] = None, model_id: Optional[str] = None):
         """
@@ -110,7 +115,7 @@ class ImageGenerator:
             self.active_model_type = model_config["type"]
             self.active_model_key = model_key if model_key in self.AVAILABLE_MODELS else "schnell"
         
-        print(f"[ImageGenerator] Active model set: key={self.active_model_key}, id={self.active_model_id}")
+        _log(f"[ImageGenerator] Active model set: key={self.active_model_key}, id={self.active_model_id}")
     
     def get_active_model_info(self) -> ModelInfo:
         """Get information about the currently active model."""
@@ -252,7 +257,7 @@ class ImageGenerator:
         if self.config.variant:
             kwargs["variant"] = self.config.variant
         
-        print(
+        _log(
             f"[Model] Loading pipeline: id={model_id}, type={model_type}, device={self.device}, "
             f"dtype={self.dtype}, cache_dir={self.config.cache_dir or 'default'}, "
             f"revision={self.config.revision or 'latest'}, variant={self.config.variant or 'default'}"

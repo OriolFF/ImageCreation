@@ -69,6 +69,30 @@ Copy `.env.example` to `.env` to explore the full set of runtime knobs. Key opti
 - `FLUX_STRUCTURED_LOGS`, `FLUX_LOG_LEVEL` — adjust logging verbosity/output format.
 - `IMAGE_SERVER_PORT` — override the FastAPI listening port (default `8000`).
 
+### Platform Configuration
+
+Use the following recommended settings based on your system:
+
+| Platform | `FLUX_DTYPE` | `FLUX_GENERATOR_DEVICE` | Notes |
+|----------|--------------|-------------------------|-------|
+| **Windows + NVIDIA GPU** | `bfloat16` | `cuda` | Best throughput on RTX 30xx/40xx/50xx |
+| **macOS + Apple Silicon** | `fp16` | `cpu` | bfloat16 unsupported; MPS RNG has bugs |
+| **CPU-only / Cross-platform** | `fp32` | `cpu` | Most compatible, slower inference |
+
+Example `.env` for **Windows with CUDA**:
+
+```bash
+FLUX_DTYPE=bfloat16
+FLUX_GENERATOR_DEVICE=cuda
+```
+
+Example `.env` for **macOS with Apple Silicon**:
+
+```bash
+FLUX_DTYPE=fp16
+FLUX_GENERATOR_DEVICE=cpu
+```
+
 ## Running the Image Creator Server
 
 Start the FastAPI server (Uvicorn) from the project root:
@@ -96,37 +120,44 @@ Notes:
 
 ## Running the Web Client
 
-The web client is static files under `web/`. It expects the API to be at `http://localhost:8000` (see `web/main.js`, constant `API_URL`). Serve it with any static server; for example:
+The web client is static files under `web/`. By default it connects to the API at `http://localhost:8000`. You can configure the API port using the custom `serve.py` script.
 
-### Python built-in HTTP server (recommended)
+### Using serve.py (recommended)
 
-From the project root:
+The `serve.py` script auto-generates `config.js` with the correct API port:
+
+```bash
+# Default: serves on port 5500, API at port 8000
+python serve.py
+
+# Custom API port (e.g., if IMAGE_SERVER_PORT=8050)
+python serve.py --api-port 8050
+
+# Custom web port + API port
+python serve.py -p 5500 --api-port 8050
+```
+
+On Windows (PowerShell):
+
+```powershell
+python serve.py --api-port 8050
+```
+
+Then open: <http://localhost:5500>
+
+### Python built-in HTTP server (alternative)
+
+If you don't need to change the API port from 8000, you can use the built-in server:
 
 ```bash
 python3 -m http.server 5500 -d web
 ```
 
-Or from the `web/` directory:
-
-```bash
-python3 -m http.server 5500
-```
-
-### On Windows (PowerShell)
-
-From the project root:
+On Windows (PowerShell):
 
 ```powershell
 python -m http.server 5500 -d web
 ```
-
-Or from the `web/` directory:
-
-```powershell
-python -m http.server 5500
-```
-
-Then open: <http://localhost:5500>
 
 ### Node (optional)
 
@@ -134,7 +165,7 @@ Then open: <http://localhost:5500>
 npx serve -l 5500 web
 ```
 
-If you change the port, the FastAPI CORS settings already allow all origins for development, so no change is needed.
+If you change the API port via `IMAGE_SERVER_PORT`, make sure to use `serve.py --api-port <port>` to keep the web client in sync.
 
 ## API Reference
 

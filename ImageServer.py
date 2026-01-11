@@ -3,39 +3,41 @@ FastAPI server for image generation API.
 Provides OpenAI-style endpoints for text-to-image generation.
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
+import sys
 import base64
 from io import BytesIO
 from datetime import datetime
 from dotenv import load_dotenv
 import time
 
+# Force unbuffered output so logs appear immediately
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+def log(msg: str):
+    """Print with immediate flush for visibility."""
+    print(msg, flush=True)
+
+log(f"[Startup] ImageServer.py loading at {datetime.now().isoformat()}")
+
 from image_generation import ImageGenerator, GenerationConfig
-
-app = FastAPI()
-
-# Minimal CORS to allow browser UI from localhost:5500 to call this API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # development: accept any origin
-    allow_credentials=False,  # must be False when allow_origins is "*"
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Load environment variables (for HF token and model selection)
 load_dotenv()
+
+log("[Startup] Environment loaded")
 
 # Get Hugging Face token
 hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_ACCESS_TOKEN")
 if hf_token:
     suffix = hf_token[-4:]
-    print(f"[Auth] Hugging Face token detected (length={len(hf_token)}, suffix=***{suffix})")
+    log(f"[Auth] Hugging Face token detected (length={len(hf_token)}, suffix=***{suffix})")
 else:
-    print("[Auth] Hugging Face token missing — set HUGGINGFACE_HUB_TOKEN or HF_ACCESS_TOKEN")
+    log("[Auth] Hugging Face token missing — set HUGGINGFACE_HUB_TOKEN or HF_ACCESS_TOKEN")
 
 # Helper function to parse boolean env vars
 def get_bool_env(key: str, default: bool) -> bool:
@@ -61,7 +63,7 @@ try:
     if not (0 < server_port < 65536):
         raise ValueError
 except (TypeError, ValueError):
-    print(f"[Config] Invalid IMAGE_SERVER_PORT value '{_port_raw}', defaulting to 8000")
+    log(f"[Config] Invalid IMAGE_SERVER_PORT value '{_port_raw}', defaulting to 8000")
     server_port = 8000
 
 # Create generation configuration from environment variables
@@ -78,20 +80,46 @@ config = GenerationConfig(
     warmup_enable=get_bool_env("FLUX_WARMUP_ENABLE", False),
 )
 
-print(f"[Config] Loaded configuration: dtype={config.dtype}, generator_device={config.generator_device}, "
-      f"slicing={config.enable_slicing}, vae_tiling={config.enable_vae_tiling}, "
-      f"cpu_offload={config.enable_cpu_offload}, preload={config.preload_models}, warmup={config.warmup_enable}")
+log(f"[Config] Loaded configuration: dtype={config.dtype}, generator_device={config.generator_device}, "
+    f"slicing={config.enable_slicing}, vae_tiling={config.enable_vae_tiling}, "
+    f"cpu_offload={config.enable_cpu_offload}, preload={config.preload_models}, warmup={config.warmup_enable}")
 
-# Initialize image generator
+# Initialize image generator (lightweight - does not load models yet)
 generator = ImageGenerator(config=config, hf_token=hf_token)
 
-# Set initial active model from environment
+# Set initial active model from environment (just sets the name, does not load)
 env_model_key = os.getenv("FLUX_MODEL_KEY", "schnell")
 env_model_id = os.getenv("FLUX_MODEL_ID")  # optional direct override
 generator.set_active_model(model_key=env_model_key, model_id=env_model_id)
 
-# Optionally preload models
-generator.preload_models()
+# Check if lazy loading is enabled (default: True for faster startup)
+lazy_load = get_bool_env("FLUX_LAZY_LOAD", True)
+log(f"[Config] Lazy loading: {lazy_load} (set FLUX_LAZY_LOAD=0 to preload at startup)")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI lifespan: preload models after server starts (if not lazy loading)."""
+    log("[Startup] FastAPI server starting...")
+    if not lazy_load:
+        log("[Startup] Preloading models (FLUX_LAZY_LOAD=0)...")
+        generator.preload_models()
+        log("[Startup] Model preload complete")
+    else:
+        log("[Startup] Lazy loading enabled - models will load on first request")
+    log(f"[Startup] Server ready at http://0.0.0.0:{server_port}")
+    yield
+    log("[Shutdown] Server shutting down...")
+
+app = FastAPI(lifespan=lifespan)
+
+# Minimal CORS to allow browser UI from localhost:5500 to call this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # development: accept any origin
+    allow_credentials=False,  # must be False when allow_origins is "*"
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def root():

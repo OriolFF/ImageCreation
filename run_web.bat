@@ -1,0 +1,6 @@
+@echo off
+echo Activating virtual environment...
+call .venv\Scripts\activate.bat
+echo Starting Web Client...
+python serve.py --api-port 8050
+pause

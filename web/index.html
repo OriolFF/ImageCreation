@@ -1,16 +1,18 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Image Creator UI</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="alternate icon" href="/favicon.ico">
+  <link rel="icon" href="/favicon.png" type="image/png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Material+Symbols+Outlined" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Material+Symbols+Outlined"
+    rel="stylesheet">
   <link rel="stylesheet" href="styles.css" />
 </head>
+
 <body>
   <header class="app-bar surface">
     <div class="app-bar__title">
@@ -18,8 +20,8 @@
       <span>Image Creator</span>
     </div>
     <nav class="app-bar__nav">
-      <a href="http://localhost:8000/docs" target="_blank" class="text-button">API Docs</a>
-      <a href="http://localhost:8000/health" target="_blank" class="text-button">Health</a>
+      <a id="apiDocsLink" href="#" target="_blank" class="text-button">API Docs</a>
+      <a id="healthLink" href="#" target="_blank" class="text-button">Health</a>
       <div class="model-picker">
         <label for="modelSelect" class="label" style="margin-right:8px;">Model</label>
         <select id="modelSelect" title="Select model">
@@ -28,7 +30,8 @@
       </div>
       <span id="runtimeInfo" class="caption" style="margin-left:12px; opacity:0.8;">—</span>
       <a id="cacheInfo" href="#" class="text-button" style="margin-left:8px;">Cache</a>
-      <button id="releaseMemoryBtn" class="text-button" style="margin-left:8px;" title="Release all cached models and free memory">
+      <button id="releaseMemoryBtn" class="text-button" style="margin-left:8px;"
+        title="Release all cached models and free memory">
         <span class="material-symbols-outlined" style="font-size:18px;">delete_sweep</span>
         <span>Free Memory</span>
       </button>
@@ -113,8 +116,10 @@
     </section>
   </main>
 
-  
 
-  <script src="main.js?v=3" type="module"></script>
+
+  <script src="config.js"></script>
+  <script src="main.js?v=7"></script>
 </body>
+
 </html>
