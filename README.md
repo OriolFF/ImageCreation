@@ -1,5 +1,25 @@
 # ImageCreatorApi
 
+## ⚠️ Critical Configuration Notes (Read this!)
+
+### **Black Images Issue (Mac/MPS)**
+If generated images are **black** (or ~800 bytes in size), it is a **precision issue**.
+- **Cause**: Running the model or VAE in `fp16` on Mac (MPS) causes "Not a Number" (NaN) overflows.
+- **Fix**: Use `bfloat16` OR ensure the code forces the VAE to `float32` (which is now built-in).
+- **Recommended Setting**: `FLUX_DTYPE=bfloat16` (Works best on both modern Macs and RTX GPUs).
+
+### **Cross-Platform Setup**
+- **Windows (NVIDIA RTX 30/40/50+)**:
+  - `FLUX_GENERATOR_DEVICE=cuda`
+  - `FLUX_DTYPE=bfloat16` (Best performance/quality) or `fp16`.
+- **macOS (Apple Silicon)**:
+  - `FLUX_GENERATOR_DEVICE=mps` (DO NOT use `cpu` unless debugging)
+  - `FLUX_DTYPE=bfloat16` (Safest)
+  - **Note**: The server automatically detects MPS and forces the VAE to `float32` to prevent black images, even if `FLUX_DTYPE=fp16` is set.
+
+---
+
+
 FastAPI-based image generation server powered by Hugging Face Diffusers with runtime model switching, warmup, and memory management routines. A companion web client in `web/` provides an interactive front end.
 
 The server exposes OpenAI-style endpoints under `/v1/*`, including text-to-image generation, model management, runtime metrics, and cache cleanup. Responses now include timing details and runtime parameters to aid debugging and benchmarking.

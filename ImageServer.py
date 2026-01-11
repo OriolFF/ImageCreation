@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 import sys
+import json
 import base64
 from io import BytesIO
 from datetime import datetime
@@ -214,10 +215,57 @@ async def generate_image(request: dict):
     if store_local:
         os.makedirs("outputs", exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        saved_path = os.path.join("outputs", f"image_{timestamp}.png")
+        base_filename = f"image_{timestamp}"
+        saved_path = os.path.join("outputs", f"{base_filename}.png")
+        json_path = os.path.join("outputs", f"{base_filename}.json")
+        
         try:
             img.save(saved_path, format="PNG")
-        except Exception:
+            
+            # Save metadata
+            try:
+                current_model_info = generator.get_active_model_info()
+                
+                # Helper to make data JSON-serializable
+                def make_serializable(obj):
+                    if isinstance(obj, (datetime,)):
+                        return obj.isoformat()
+                    return str(obj)
+
+                metadata = {
+                    "prompt": prompt,
+                    "timestamp": timestamp,
+                    "model": {
+                        "id": current_model_info.id,
+                        "key": current_model_info.key,
+                        "type": current_model_info.type
+                    },
+                    "parameters": {
+                        "height": height,
+                        "width": width,
+                        "num_inference_steps": num_inference_steps,
+                        "guidance_scale": guidance_scale,
+                        "max_sequence_length": max_sequence_length,
+                        "seed": seed if isinstance(seed, int) else 42,
+                        "fallback_applied": locals().get('fallback_applied', False),
+                    },
+                    "timing": timing_metrics,
+                    "device": generator.get_device_info()
+                }
+                
+                # Add fallback info if it exists
+                if locals().get('fallback_applied', False) and 'original_params' in locals():
+                    metadata["parameters"]["original_params"] = original_params
+                
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(metadata, f, indent=2, default=make_serializable)
+                log(f"[Metadata] Saved to {json_path}")
+                
+            except Exception as e:
+                log(f"[Error] Failed to save metadata (image was saved): {e}")
+
+        except Exception as e:
+            log(f"[Error] Failed to save image or metadata: {e}")
             saved_path = None
     save_time = time.time() - save_start
     

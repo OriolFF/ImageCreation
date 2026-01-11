@@ -268,7 +268,9 @@ class ImageGenerator:
             if model_type == "flux":
                 pipe = FluxPipeline.from_pretrained(model_id, **kwargs)
             else:
-                kwargs.setdefault("trust_remote_code", True)
+                # Qwen-Image and some new pipelines don't accept trust_remote_code
+                if "Qwen" not in model_id:
+                    kwargs.setdefault("trust_remote_code", True)
                 pipe = DiffusionPipeline.from_pretrained(model_id, **kwargs)
         except Exception as e:
             error_msg = str(e).lower()
@@ -288,9 +290,21 @@ class ImageGenerator:
                 print(f"{'='*70}\n")
             raise
         
+        # Move to device (this can trigger heavy MPS shader compilation on first run)
+        _log(f"[Model] Moving pipeline to {self.device} (this may take time for first run/compilation)...")
+        move_start = time.time()
         try:
             pipe.to(self.device)
-        except Exception:
+            
+            # MPS SPECIFIC FIX: Force VAE to float32 to avoid black images
+            if self.device.type == "mps" and hasattr(pipe, "vae"):
+                _log("[Model] MPS detected: Forcing VAE to float32 to prevent black images")
+                pipe.vae.to(dtype=torch.float32)
+                
+            move_time = time.time() - move_start
+            _log(f"[Model] Moved to {self.device} in {move_time:.2f}s")
+        except Exception as e:
+            print(f"[Model] ERROR: Failed to move pipeline to {self.device}: {e}")
             pass
         
         # Apply optimizations (only if supported by the pipeline)
