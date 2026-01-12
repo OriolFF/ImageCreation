@@ -52,6 +52,19 @@
           <div id="tokenInfo" class="caption" style="margin-top:4px; opacity:0.8;"></div>
         </div>
 
+        <div class="field">
+          <label for="negativePrompt" class="label">Negative Prompt (optional)</label>
+          <div class="textarea-wrapper">
+            <textarea id="negativePrompt" rows="2"
+              placeholder="e.g. blurry, low quality, distorted, ugly, watermark"></textarea>
+          </div>
+        </div>
+
+        <div class="field" style="width: 160px;">
+          <label for="seedInput" class="label">Seed (optional)</label>
+          <input id="seedInput" type="number" min="-1" step="1" value="" placeholder="Random" />
+        </div>
+
         <div class="composer-row">
           <div class="field" style="min-width: 180px;">
             <label for="presetSelect" class="label">Preset</label>

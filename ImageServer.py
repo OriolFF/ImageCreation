@@ -187,6 +187,7 @@ async def generate_image(request: dict):
         return {"error": "prompt is required"}
 
     store_local = bool(request.get("store_local", True))
+    negative_prompt = request.get("negative_prompt", "").strip() or None
 
     # Optional generation parameters with fast defaults (tuned for M1 32GB)
     height = int(request.get("height", 512))
@@ -201,6 +202,7 @@ async def generate_image(request: dict):
     # Generate image using the generator
     img, fallback_applied, original_params, timing_metrics = await generator.generate(
         prompt=prompt,
+        negative_prompt=negative_prompt,
         height=height,
         width=width,
         num_inference_steps=num_inference_steps,

@@ -2,10 +2,13 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 
 # Core ML stack
-torch>=2.3.0
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.9.1+cu128
+torchvision==0.24.1+cu128
 accelerate>=0.31.0
 transformers>=4.44.0,<4.57.0
 diffusers>=0.35.0
+bitsandbytes>=0.43.0  # Required for NF4 quantized models
 safetensors>=0.4.2
 pillow>=10.3.0
 python-dotenv>=1.1.1

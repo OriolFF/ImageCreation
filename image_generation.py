@@ -3,7 +3,8 @@ Image generation module for managing diffusion pipelines and image generation.
 Handles model loading, caching, cleanup, and generation logic.
 """
 
-from diffusers import FluxPipeline, DiffusionPipeline
+from diffusers import FluxPipeline, DiffusionPipeline, StableDiffusion3Pipeline
+from transformers import T5EncoderModel
 import torch
 import gc
 import asyncio
@@ -43,11 +44,13 @@ class ModelInfo:
 class ImageGenerator:
     """Manages image generation pipelines and model switching."""
     
-    # Model registry
+    # Model registry - only includes fully tested models
     AVAILABLE_MODELS = {
+        # FLUX models - require CPU offload on 16GB GPUs
         "schnell": {"id": "black-forest-labs/FLUX.1-schnell", "type": "flux"},
         "dev": {"id": "black-forest-labs/FLUX.1-dev", "type": "flux"},
-        "qwen": {"id": "Qwen/Qwen-Image", "type": "diffusion"},
+        # Stable Diffusion 3.5 - fits on 16GB with FP16
+        "sd35-medium": {"id": "stabilityai/stable-diffusion-3.5-medium", "type": "sd3"},
     }
     
     def __init__(self, config: GenerationConfig, hf_token: Optional[str] = None):
@@ -257,6 +260,9 @@ class ImageGenerator:
         if self.config.variant:
             kwargs["variant"] = self.config.variant
         
+        # NF4 models need no special flags if bitsandbytes is installed, 
+        # diffusers handles them automatically via the config.json in the repo.
+        
         _log(
             f"[Model] Loading pipeline: id={model_id}, type={model_type}, device={self.device}, "
             f"dtype={self.dtype}, cache_dir={self.config.cache_dir or 'default'}, "
@@ -267,6 +273,8 @@ class ImageGenerator:
         try:
             if model_type == "flux":
                 pipe = FluxPipeline.from_pretrained(model_id, **kwargs)
+            elif model_type == "sd3":
+                pipe = StableDiffusion3Pipeline.from_pretrained(model_id, **kwargs)
             else:
                 # Qwen-Image and some new pipelines don't accept trust_remote_code
                 if "Qwen" not in model_id:
@@ -290,30 +298,40 @@ class ImageGenerator:
                 print(f"{'='*70}\n")
             raise
         
-        # Move to device (this can trigger heavy MPS shader compilation on first run)
-        _log(f"[Model] Moving pipeline to {self.device} (this may take time for first run/compilation)...")
-        move_start = time.time()
-        try:
-            pipe.to(self.device)
-            
-            # MPS SPECIFIC FIX: Force VAE to float32 to avoid black images
-            if self.device.type == "mps" and hasattr(pipe, "vae"):
-                _log("[Model] MPS detected: Forcing VAE to float32 to prevent black images")
-                pipe.vae.to(dtype=torch.float32)
+        # Apply optimizations BEFORE moving to device
+        # CPU offload must be enabled BEFORE calling .to(device) or it will OOM
+        if self.config.enable_cpu_offload and hasattr(pipe, 'enable_model_cpu_offload'):
+            _log(f"[Model] Enabling CPU offload (required for {model_id} on 16GB GPUs)...")
+            pipe.enable_model_cpu_offload()
+            _log("[Model] CPU offload enabled - model components will move to GPU on demand")
+        else:
+            # Only move to device if NOT using CPU offload
+            _log(f"[Model] Moving pipeline to {self.device} (this may take time for first run/compilation)...")
+            move_start = time.time()
+            try:
+                pipe.to(self.device)
                 
-            move_time = time.time() - move_start
-            _log(f"[Model] Moved to {self.device} in {move_time:.2f}s")
-        except Exception as e:
-            print(f"[Model] ERROR: Failed to move pipeline to {self.device}: {e}")
-            pass
+                # MPS SPECIFIC FIX: Force VAE to float32 to avoid black images
+                if self.device.type == "mps" and hasattr(pipe, "vae"):
+                    _log("[Model] MPS detected: Forcing VAE to float32 to prevent black images")
+                    pipe.vae.to(dtype=torch.float32)
+                    
+                move_time = time.time() - move_start
+                _log(f"[Model] Moved to {self.device} in {move_time:.2f}s")
+            except Exception as e:
+                _log(f"[Model] ERROR: Failed to move pipeline to {self.device}: {e}")
+                # Try CPU offload as fallback
+                if hasattr(pipe, 'enable_model_cpu_offload'):
+                    _log("[Model] Attempting CPU offload as fallback...")
+                    pipe.enable_model_cpu_offload()
+                else:
+                    raise
         
-        # Apply optimizations (only if supported by the pipeline)
+        # Apply memory optimizations
         if self.config.enable_slicing and hasattr(pipe, 'enable_attention_slicing'):
             pipe.enable_attention_slicing()
         if self.config.enable_vae_tiling and hasattr(pipe, 'enable_vae_tiling'):
             pipe.enable_vae_tiling()
-        if self.config.enable_cpu_offload and hasattr(pipe, 'enable_model_cpu_offload'):
-            pipe.enable_model_cpu_offload()
         
         # Warm up the pipeline if enabled
         self._warmup_pipeline(pipe, model_id, model_type)
@@ -375,6 +393,14 @@ class ImageGenerator:
             # Clear cache of old pipelines
             self._pipelines_cache.clear()
             
+            # Force memory cleanup before loading new model
+            gc.collect()
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                _log(f"[Model] CUDA memory freed. Available: {torch.cuda.memory_reserved(0) / 1024**3:.2f}GB reserved")
+            
+            
             # Load the new pipeline
             if new_model_id not in self._pipelines_cache:
                 self._pipelines_cache[new_model_id] = self._build_pipeline(new_model_id, new_model_type)
@@ -405,6 +431,7 @@ class ImageGenerator:
         pipe, 
         *, 
         prompt: str, 
+        negative_prompt: Optional[str] = None,
         height: int, 
         width: int, 
         steps: int,
@@ -427,6 +454,13 @@ class ImageGenerator:
             kwargs["width"] = width
             kwargs["guidance_scale"] = guidance
             kwargs["max_sequence_length"] = max_seq_len
+        # SD3 models use standard diffusers parameters and support negative_prompt
+        elif model_type == "sd3":
+            kwargs["height"] = height
+            kwargs["width"] = width
+            kwargs["guidance_scale"] = guidance
+            if negative_prompt:
+                kwargs["negative_prompt"] = negative_prompt
         # Qwen-Image uses true_cfg_scale instead of guidance_scale
         elif model_type == "diffusion" and "Qwen" in str(pipe.__class__.__name__):
             kwargs["height"] = height
@@ -442,12 +476,15 @@ class ImageGenerator:
                 pipe.__class__.__init__.__code__.co_varnames
             ):
                 kwargs["guidance_scale"] = guidance
+            if negative_prompt:
+                kwargs["negative_prompt"] = negative_prompt
         
         return pipe(**kwargs).images
     
     async def generate(
         self,
         prompt: str,
+        negative_prompt: Optional[str] = None,
         height: int = 512,
         width: int = 512,
         num_inference_steps: int = 4,
@@ -514,6 +551,7 @@ class ImageGenerator:
             images = self._try_generate(
                 pipe,
                 prompt=prompt,
+                negative_prompt=negative_prompt,
                 height=height,
                 width=width,
                 steps=num_inference_steps,
@@ -538,6 +576,7 @@ class ImageGenerator:
                     images = self._try_generate(
                         pipe,
                         prompt=prompt,
+                        negative_prompt=negative_prompt,
                         height=fallback_h,
                         width=fallback_w,
                         steps=max(8, num_inference_steps - 4),

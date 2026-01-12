@@ -419,6 +419,9 @@ async function generate() {
     return;
   }
   const prompt = $("#prompt").value.trim();
+  const negativePrompt = $("#negativePrompt")?.value?.trim() || "";
+  const seedValue = $("#seedInput")?.value?.trim();
+  const seed = seedValue ? parseInt(seedValue, 10) : null;
   const storeLocal = $("#storeLocal").checked;
   const writeMetadata = $("#writeMetadata")?.checked ?? true;
   const preset = $("#presetSelect")?.value || "medium";
@@ -459,14 +462,25 @@ async function generate() {
       : `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     currentRequestId = requestId;
 
-    // Show equivalent curl in the chat for convenience
-    const bodyForCurl = {
+    // Build request body with optional negative_prompt and seed
+    const requestBody = {
       prompt,
       store_local: storeLocal,
       write_metadata: writeMetadata,
       request_id: requestId,
       ...p,
     };
+    // Only include negative_prompt if provided
+    if (negativePrompt) {
+      requestBody.negative_prompt = negativePrompt;
+    }
+    // Only include seed if provided (null means random)
+    if (seed !== null && !isNaN(seed)) {
+      requestBody.seed = seed;
+    }
+
+    // Show equivalent curl in the chat for convenience
+    const bodyForCurl = { ...requestBody };
     const curlCmd = buildCurl(API_URL, bodyForCurl);
     const html = `
       <details>
@@ -484,7 +498,7 @@ async function generate() {
     const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, store_local: storeLocal, write_metadata: writeMetadata, request_id: requestId, ...p }),
+      body: JSON.stringify(requestBody),
       signal: ctrl.signal,
     });
     clearTimeout(timeoutId);

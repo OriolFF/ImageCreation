@@ -42,30 +42,47 @@ The server exposes OpenAI-style endpoints under `/v1/*`, including text-to-image
 
 ## Setup
 
-You can create a virtual environment with either `uv` or built-in `venv`.
+This project uses **uv** for package management (recommended). Using standard `pip` may cause issues since uv-created venvs don't include pip by default.
 
-### Option A: Using uv
+> [!IMPORTANT]
+> **Always use `uv pip install` instead of `pip install`** when adding new packages. This ensures packages are installed correctly in the virtual environment.
+
+### Using uv (Recommended)
+
+If you don't have uv installed, get it from: https://docs.astral.sh/uv/getting-started/installation/
 
 ```bash
 # From project root
 uv venv  # creates .venv
-source .venv/bin/activate
+source .venv/bin/activate  # macOS/Linux
 uv pip install -r requirements.txt
 ```
 
-On macOS/Linux, `source .venv/bin/activate` activates the environment.
-
-On Windows (PowerShell), activate it with:
+On Windows (PowerShell), activate with:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
+uv pip install -r requirements.txt
 ```
 
-### Option B: Using Python venv
+#### Installing new packages
+
+```bash
+# Always use uv pip, NOT pip
+uv pip install <package-name>
+
+# Example:
+uv pip install torchao>=0.10.0
+```
+
+### Alternative: Using Python venv
+
+If you prefer standard venv, you must bootstrap pip first:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+python -m ensurepip --upgrade  # Required: install pip in the venv
 pip install -r requirements.txt
 ```
 
